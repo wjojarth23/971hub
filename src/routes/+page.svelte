@@ -149,15 +149,14 @@
   function handleGcodeDrop(event, partId) {
     event.preventDefault();
     event.currentTarget.classList.remove('active');
-    
-    const files = event.dataTransfer.files;
+      const files = event.dataTransfer.files;
     if (files.length > 0) {
       const file = files[0];
       const fileExtension = file.name.split('.').pop().toLowerCase();
-      const allowedExtensions = ['gcode', 'nc', 'cnc', 'tap'];
+      const allowedExtensions = ['gcode', 'nc', 'cnc', 'tap', 'ngc'];
       
       if (!allowedExtensions.includes(fileExtension)) {
-        alert('Please upload a G-code file (.gcode, .nc, .cnc, or .tap)');
+        alert('Please upload a G-code file (.gcode, .nc, .cnc, .tap, or .ngc)');
         return;
       }
       
