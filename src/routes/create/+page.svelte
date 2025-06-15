@@ -111,20 +111,19 @@
         throw uploadError;
       }
 
-      console.log('File upload successful:', uploadData);
-
-      // Insert part record into database
+      console.log('File upload successful:', uploadData);      // Insert part record into database
       const { data: partData, error: insertError } = await supabase
         .from('parts')
         .insert([
           {
-            part_name: partName,
-            requester_name: requesterName,
+            name: partName,
+            requester: requesterName,
             project_id: projectId,
             workflow: workflow,
             quantity: quantity,
             material: material,
             file_name: fileName,
+            file_url: fileName,
             status: 'pending'
           }
         ])
@@ -133,9 +132,7 @@
       if (insertError) {
         console.error('Database insert error:', insertError);
         throw insertError;
-      }
-
-      console.log('Part record created successfully:', partData);
+      }      console.log('Part record created successfully:', partData);
       
       // Reset form
       partName = '';
@@ -145,8 +142,6 @@
       quantity = 1;
       material = '';
       uploadedFile = null;
-      
-      alert(`Part "${partData[0].part_name}" submitted successfully!`);
       
       // Navigate to parts list
       goto('/');
@@ -321,39 +316,29 @@
 </div>
 
 <style>
-  .container {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 2rem;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  }
-
   .header {
-    text-align: center;
     margin-bottom: 2rem;
   }
 
   .header h1 {
-    color: #1a1a1a;
-    font-size: 2.5rem;
     margin-bottom: 0.5rem;
-    font-weight: 700;
   }
 
   .header p {
     color: #666;
-    font-size: 1.1rem;
+    margin-bottom: 0;
   }
 
   .form-container {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    overflow: hidden;
+    background: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
   }
 
   .manufacturing-form {
-    padding: 2rem;
+    /* Remove extra padding since form-container has it */
   }
 
   .form-section {
@@ -361,9 +346,8 @@
   }
 
   .form-section h2 {
-    color: #1a1a1a;
-    font-size: 1.25rem;
     margin-bottom: 1rem;
+    font-size: 1.25rem;
     font-weight: 600;
   }
 
@@ -374,7 +358,6 @@
   .form-group label {
     display: block;
     margin-bottom: 0.5rem;
-    color: #374151;
     font-weight: 500;
   }
 
@@ -382,16 +365,15 @@
   .form-group select {
     width: 100%;
     padding: 0.75rem;
-    border: 2px solid #e5e7eb;
-    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
     font-size: 1rem;
-    transition: border-color 0.2s;
   }
 
   .form-group input:focus,
   .form-group select:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
   }
 
   .workflow-grid {
@@ -403,11 +385,11 @@
   .workflow-card {
     display: block;
     padding: 1rem;
-    border: 2px solid #e5e7eb;
-    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
     cursor: pointer;
-    transition: all 0.2s;
     position: relative;
+    background: var(--primary);
   }
 
   .workflow-card input {
@@ -417,13 +399,12 @@
   }
 
   .workflow-card:hover {
-    border-color: #d1d5db;
-    transform: translateY(-2px);
+    border-color: var(--accent);
   }
 
   .workflow-card.selected {
-    border-color: #3b82f6;
-    background-color: #eff6ff;
+    border-color: var(--accent);
+    background-color: rgba(241, 195, 49, 0.1);
   }
 
   .workflow-content {
@@ -435,46 +416,36 @@
 
   .workflow-name {
     font-weight: 600;
-    color: #1a1a1a;
   }
 
   .workflow-file-type {
     font-size: 0.875rem;
     color: #666;
-    background: #f3f4f6;
+    background: var(--background);
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
   }
-
-  .workflow-laser { border-left: 4px solid #fbbf24; }
-  .workflow-router { border-left: 4px solid #10b981; }
-  .workflow-lathe { border-left: 4px solid #8b5cf6; }
-  .workflow-mill { border-left: 4px solid #f59e0b; }
-  .workflow-3d-print { border-left: 4px solid #ef4444; }
 
   .upload-container {
     margin-top: 1rem;
   }
 
   .file-drop-zone {
-    border: 2px dashed #d1d5db;
-    border-radius: 8px;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
     padding: 2rem;
     text-align: center;
     cursor: pointer;
-    transition: all 0.2s;
-    background: #fafafa;
+    background: var(--background);
   }
 
   .file-drop-zone:hover,
   .file-drop-zone.active {
-    border-color: #3b82f6;
-    background: #eff6ff;
+    border-color: var(--accent);
   }
 
   .file-drop-zone.has-file {
-    border-color: #10b981;
-    background: #ecfdf5;
+    border-color: var(--success);
   }
 
   .upload-prompt,
@@ -487,22 +458,21 @@
 
   .upload-text {
     font-weight: 500;
-    color: #374151;
   }
 
   .upload-subtext {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: #666;
   }
 
   .file-name {
     font-weight: 600;
-    color: #065f46;
+    color: var(--success);
   }
 
   .file-size {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: #666;
   }
 
   .form-actions {
@@ -511,39 +481,26 @@
   }
 
   .submit-btn {
-    background: #3b82f6;
-    color: white;
+    background: var(--accent);
+    color: var(--secondary);
     border: none;
-    padding: 1rem 2rem;
-    border-radius: 8px;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s;
   }
 
   .submit-btn:hover:not(:disabled) {
-    background: #2563eb;
+    opacity: 0.9;
   }
 
   .submit-btn:disabled {
-    background: #9ca3af;
+    background: #ccc;
     cursor: not-allowed;
   }
 
   @media (max-width: 640px) {
-    .container {
-      padding: 1rem;
-    }
-
-    .header h1 {
-      font-size: 2rem;
-    }
-
-    .manufacturing-form {
-      padding: 1rem;
-    }
-
     .workflow-grid {
       grid-template-columns: 1fr;
     }
