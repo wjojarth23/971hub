@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
-  import { Search, Filter, Clock, CheckCircle, Truck, Package, Download } from 'lucide-svelte';
+  import { Search, Filter, Clock, CheckCircle, Truck, Package, Download, Zap, Wrench, FileText, Upload } from 'lucide-svelte';
   
   let parts = [];
   let filteredParts = [];
@@ -9,17 +9,16 @@
   let searchTerm = '';
   let filterWorkflow = '';
   let filterStatus = '';
-  
-  const workflows = [
-    { value: 'laser-cut', label: 'Laser Cut', icon: '🔥' },
-    { value: 'router', label: 'Router', icon: '🔄' },
-    { value: 'lathe', label: 'Lathe', icon: '🔧' },
-    { value: 'mill', label: 'Mill', icon: '⚙️' },
-    { value: '3d-print', label: '3D Print', icon: '🖨️' }
-  ];
-  const statuses = [
+    const workflows = [
+    { value: 'laser-cut', label: 'Laser Cut', icon: Zap },
+    { value: 'router', label: 'Router', icon: Wrench },
+    { value: 'lathe', label: 'Lathe', icon: FileText },
+    { value: 'mill', label: 'Mill', icon: FileText },
+    { value: '3d-print', label: '3D Print', icon: Upload }
+  ];  const statuses = [
     { value: 'pending', label: 'Pending' },
     { value: 'in-progress', label: 'In Progress' },
+    { value: 'cammed', label: 'Cammed' },
     { value: 'complete', label: 'Complete' }
   ];
 
@@ -79,8 +78,76 @@
     }
   }
 
+  async function uploadGcodeFile(partId, file) {
+    try {
+      // Upload G-code file to Supabase Storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_gcode_${partId}.${fileExt}`;
+      
+      console.log('Uploading G-code file:', fileName);
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('manufacturing-files')
+        .upload(fileName, file);
+      
+      if (uploadError) throw uploadError;
+      
+      console.log('G-code file uploaded successfully:', uploadData.path);
+      
+      // Get the public URL for the uploaded file
+      const { data: { publicUrl } } = supabase.storage
+        .from('manufacturing-files')
+        .getPublicUrl(fileName);
+      
+      // Update the part with G-code file info and change status to 'cammed'
+      const { error: updateError } = await supabase
+        .from('parts')
+        .update({ 
+          gcode_file_name: fileName,
+          gcode_file_url: publicUrl,
+          status: 'cammed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', partId);
+      
+      if (updateError) throw updateError;
+      
+      await loadParts();
+      alert('G-code file uploaded successfully! Part status updated to Cammed.');
+    } catch (error) {
+      console.error('Error uploading G-code file:', error);
+      alert(`Error uploading G-code file: ${error.message}`);
+    }
+  }  function handleGcodeFileUpload(event, partId) {
+    const file = event.target.files[0];
+    if (file) {
+      uploadGcodeFile(partId, file);
+      event.target.value = ''; // Reset input
+    }
+  }
+
+  function handleGcodeDrop(event, partId) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('active');
+    
+    const files = event.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      const fileExtension = file.name.split('.').pop().toLowerCase();
+      const allowedExtensions = ['gcode', 'nc', 'cnc', 'tap'];
+      
+      if (!allowedExtensions.includes(fileExtension)) {
+        alert('Please upload a G-code file (.gcode, .nc, .cnc, or .tap)');
+        return;
+      }
+      
+      uploadGcodeFile(partId, file);
+    }
+  }
+
   async function updatePartStatus(partId, newStatus) {
-    try {      const { error } = await supabase
+    try {
+      const { error } = await supabase
         .from('parts')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', partId);
@@ -121,14 +188,24 @@
     const found = workflows.find(w => w.value === workflow);
     return found ? found.label : workflow;
   }
-
   function getWorkflowIcon(workflow) {
     const found = workflows.find(w => w.value === workflow);
-    return found ? found.icon : '📄';
+    return found ? found.icon : FileText;
   }
-
   function formatDate(dateString) {
     return new Date(dateString).toLocaleDateString();
+  }
+
+  function getStatusDisplay(part) {
+    if (part.status === 'complete') {
+      if (part.kitting_bin) {
+        return part.kitting_bin;
+      } else if (part.delivered) {
+        return 'Delivered';
+      }
+      return 'Complete';
+    }
+    return part.status;
   }
 
   async function exportToCSV() {
@@ -287,14 +364,12 @@
       <div class="card part-card">
         <div class="part-header">
           <div class="part-info">
-            <h3>{part.name}</h3>
-            <div class="workflow-badge">
-              <span class="workflow-icon">{getWorkflowIcon(part.workflow)}</span>
+            <h3>{part.name}</h3>            <div class="workflow-badge">
+              <svelte:component this={getWorkflowIcon(part.workflow)} size={16} />
               {getWorkflowLabel(part.workflow)}
             </div>
-          </div>
-          <div class="status-badge status-{part.status}">
-            {part.status}
+          </div>          <div class="status-badge status-{part.status}">
+            {getStatusDisplay(part)}
           </div>
         </div>          <div class="part-details">
           <p><strong>Requester:</strong> {part.requester}</p>
@@ -303,7 +378,7 @@
           {#if part.material}
             <p><strong>Material:</strong> {part.material}</p>
           {/if}
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>{#if part.file_name}
+          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>          {#if part.file_name}
             <p><strong>File:</strong> 
               <button 
                 class="file-link" 
@@ -314,62 +389,135 @@
               </button>
             </p>
           {/if}
+          {#if part.gcode_file_name}
+            <p><strong>G-code File:</strong> 
+              <a 
+                href={part.gcode_file_url}
+                target="_blank"
+                class="file-link"
+              >
+                Download {part.gcode_file_name}
+              </a>
+            </p>
+          {/if}
           {#if part.kitting_bin}
             <p><strong>Kitting Bin:</strong> {part.kitting_bin}</p>
           {/if}
           {#if part.delivered}
             <p><strong>Status:</strong> Delivered</p>
-          {/if}
-        </div>        <div class="part-actions">
-          {#if part.status === 'pending'}
-            <button
-              class="btn btn-secondary"
-              on:click={() => updatePartStatus(part.id, 'in-progress')}
-            >
-              <Clock size={16} />
-              Start Work
-            </button>
-          {:else if part.status === 'in-progress'}
-            <div class="complete-actions">
+          {/if}        </div>        {#if part.status === 'pending' || part.status === 'in-progress' || (part.status === 'cammed' && part.workflow === 'router')}
+          <div class="part-actions">
+            {#if part.status === 'pending'}
               <button
-                class="btn"
-                on:click={() => completePart(part.id, 'delivered')}
+                class="btn btn-secondary"
+                on:click={() => updatePartStatus(part.id, 'in-progress')}
               >
-                <Truck size={16} />
-                Mark Delivered
+                <Clock size={16} />
+                Start Work
               </button>
-              <div class="kitting-action">
-                <input
-                  type="text"
-                  placeholder="Kitting Bin ID"
-                  class="form-input kitting-input"
-                  on:keydown={(e) => {
-                    if (e.key === 'Enter' && e.target.value.trim()) {
-                      completePart(part.id, 'kitting-bin', e.target.value.trim());
-                    }
-                  }}
-                />
+            {:else if part.status === 'in-progress'}
+              {#if part.workflow === 'router'}
+                <div class="router-cam-section">
+                  <p><strong>Step 1:</strong> Download STEP file above</p>
+                  <p><strong>Step 2:</strong> Upload G-code file after CAM processing</p>                  <div class="gcode-upload">
+                    <label class="form-label">Upload G-code File:</label>
+                    <div class="file-upload-area" 
+                         on:click={() => document.getElementById(`gcode-upload-${part.id}`).click()}
+                         on:dragover={handleDragOver}
+                         on:dragleave={handleDragLeave}
+                         on:drop={(e) => handleGcodeDrop(e, part.id)}
+                         role="button"
+                         tabindex="0"
+                         on:keydown={(e) => {
+                           if (e.key === 'Enter' || e.key === ' ') {
+                             document.getElementById(`gcode-upload-${part.id}`).click();
+                           }
+                         }}>
+                      <input
+                        id="gcode-upload-{part.id}"
+                        type="file"
+                        accept=".gcode,.nc,.cnc,.tap"
+                        class="file-input-hidden"
+                        on:change={(e) => handleGcodeFileUpload(e, part.id)}
+                      />
+                      <Upload size={32} />
+                      <span class="upload-text">Drop your G-code file here or click to browse</span>
+                      <span class="file-info">Only G-code files are accepted (.gcode, .nc, .cnc, .tap)</span>
+                    </div>
+                  </div>
+                </div>
+              {:else}
+                <div class="complete-actions">
+                  <button
+                    class="btn"
+                    on:click={() => completePart(part.id, 'delivered')}
+                  >
+                    <Truck size={16} />
+                    Mark Delivered
+                  </button>
+                  <div class="kitting-action">
+                    <input
+                      type="text"
+                      placeholder="Kitting Bin ID"
+                      class="form-input kitting-input"
+                      on:keydown={(e) => {
+                        if (e.key === 'Enter' && e.target.value.trim()) {
+                          completePart(part.id, 'kitting-bin', e.target.value.trim());
+                        }
+                      }}
+                    />
+                    <button
+                      class="btn btn-secondary"
+                      on:click={(e) => {
+                        const input = e.target.previousElementSibling;
+                        if (input.value.trim()) {
+                          completePart(part.id, 'kitting-bin', input.value.trim());
+                        }
+                      }}
+                    >
+                      <Package size={16} />
+                      To Bin
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            {:else if part.status === 'cammed' && part.workflow === 'router'}
+              <div class="complete-actions">
                 <button
-                  class="btn btn-secondary"
-                  on:click={(e) => {
-                    const input = e.target.previousElementSibling;
-                    if (input.value.trim()) {
-                      completePart(part.id, 'kitting-bin', input.value.trim());
-                    }
-                  }}
+                  class="btn"
+                  on:click={() => completePart(part.id, 'delivered')}
                 >
-                  <Package size={16} />
-                  To Bin
+                  <Truck size={16} />
+                  Mark Delivered
                 </button>
+                <div class="kitting-action">
+                  <input
+                    type="text"
+                    placeholder="Kitting Bin ID"
+                    class="form-input kitting-input"
+                    on:keydown={(e) => {
+                      if (e.key === 'Enter' && e.target.value.trim()) {
+                        completePart(part.id, 'kitting-bin', e.target.value.trim());
+                      }
+                    }}
+                  />
+                  <button
+                    class="btn btn-secondary"
+                    on:click={(e) => {
+                      const input = e.target.previousElementSibling;
+                      if (input.value.trim()) {
+                        completePart(part.id, 'kitting-bin', input.value.trim());
+                      }
+                    }}
+                  >
+                    <Package size={16} />
+                    To Bin
+                  </button>
+                </div>
               </div>
-            </div>
-          {:else if part.status === 'complete'}
-            <div class="complete-indicator">
-              <CheckCircle size={16} color="var(--success)" />
-              Completed
-            </div>
-          {/if}
-        </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     {/each}
   </div>
@@ -390,7 +538,8 @@
   }
   
   .part-card {
-    border-left: 4px solid var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
   }
   
   .part-header {
@@ -411,9 +560,10 @@
     gap: 0.5rem;
     background: var(--background);
     padding: 0.25rem 0.75rem;
-    border-radius: 20px;
+    border-radius: 4px;
     font-size: 0.875rem;
     font-weight: 500;
+    border: 1px solid var(--border);
   }
   
   .part-details {
@@ -450,18 +600,63 @@
     display: flex;
     gap: 0.5rem;
   }
-  
   .kitting-input {
     flex: 1;
     margin: 0;
   }
   
-  .complete-indicator {
+  .router-cam-section {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  
+  .router-cam-section p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+  .gcode-upload {
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
-    color: var(--success);
+  }
+  
+  .file-upload-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    border: 2px dashed var(--border);
+    border-radius: 4px;
+    background: var(--background);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    gap: 0.75rem;
+  }
+  
+  .file-upload-area:hover,
+  .file-upload-area.active {
+    border-color: var(--accent);
+    background: rgba(241, 195, 49, 0.1);
+  }
+  
+  .file-input-hidden {
+    display: none;
+  }
+  
+  .upload-text {
+    font-size: 1rem;
     font-weight: 500;
+    color: var(--secondary);
+  }
+  
+  .file-info {
+    font-size: 0.8rem;
+    color: #666;
+    font-style: italic;
   }
   
   @media (max-width: 768px) {

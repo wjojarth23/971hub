@@ -1,4 +1,5 @@
 <script>
+  import { goto } from '$app/navigation';
   import { supabase } from '$lib/supabase.js';
   import { Upload, FileText, Wrench, Zap } from 'lucide-svelte';
   
@@ -141,6 +142,9 @@
       uploadedFile = null;
       document.getElementById('file-input').value = '';
       
+      // Redirect to parts list
+      goto('/parts');
+      
     } catch (error) {
       console.error('Error submitting part request:', error);
       
@@ -165,6 +169,38 @@
 <svelte:head>
   <title>Create Part - Manufacturing Management</title>
 </svelte:head>
+
+<style>
+  .upload-icon-button {
+    background: transparent;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-accent, #666);
+    gap: 8px;
+  }
+
+  .browse-text {
+    color: #999;
+    font-size: 14px;
+    font-weight: normal;
+  }
+
+  .upload-icon-button:hover {
+    border-color: #999;
+    background-color: #f8f9fa;
+  }
+
+  .upload-icon-button:active {
+    transform: scale(0.98);
+  }
+</style>
 
 <div class="grid grid-2">
   <div class="card">
@@ -287,28 +323,27 @@
               style="display: none;"
             />
             
-            <div style="pointer-events: none;">
-              <Upload size={32} style="margin-bottom: 12px; color: var(--color-accent);" />
-              <p>
+            <div style="display: flex; flex-direction: column; align-items: center;">
+              <button
+                type="button"
+                class="upload-icon-button"
+                on:click={() => document.getElementById('file-input').click()}
+              >
+                <Upload size={32} />
+                <span class="browse-text">Browse</span>
+              </button>
+              
+              <p style="margin-top: 8px; margin-bottom: 4px; text-align: center;">
                 {#if uploadedFile}
                   <strong>Selected:</strong> {uploadedFile.name}
                 {:else}
                   Drop your {selectedWorkflow.fileType.toUpperCase()} file here or click to browse
                 {/if}
               </p>
-              <p style="font-size: 12px; color: #666; margin-top: 8px;">
+              <p style="font-size: 12px; color: #666; margin-top: 0; margin-bottom: 0; text-align: center;">
                 Only {selectedWorkflow.fileType.toUpperCase()} files are accepted
               </p>
             </div>
-            
-            <button
-              type="button"
-              class="btn btn-outline"
-              style="margin-top: 12px; pointer-events: auto;"
-              on:click={() => document.getElementById('file-input').click()}
-            >
-              Browse Files
-            </button>
           </div>
         </div>
       {/if}
@@ -316,7 +351,7 @@
       <button
         type="submit"
         class="btn btn-primary"
-        style="width: 100%; margin-top: 20px;"
+        style="width: 100%; margin-top: 20px; text-align: center; justify-content: center;"
         disabled={isSubmitting}
       >
         {#if isSubmitting}
