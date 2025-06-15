@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
-  import { Search, Filter, Clock, CheckCircle, Truck, Package } from 'lucide-svelte';
+  import { Search, Filter, Clock, CheckCircle, Truck, Package, Download } from 'lucide-svelte';
   
   let parts = [];
   let filteredParts = [];
@@ -26,7 +26,6 @@
   onMount(async () => {
     await loadParts();
   });
-
   async function loadParts() {
     try {      const { data, error } = await supabase
         .from('parts')
@@ -35,27 +34,13 @@
       
       if (error) throw error;
       parts = data || [];
-      filterParts();
     } catch (error) {
       console.error('Error loading parts:', error);
       alert('Error loading parts. Please try again.');
     } finally {
       loading = false;
     }
-  }
-  function filterParts() {
-    filteredParts = parts.filter(part => {
-      const matchesSearch = !searchTerm || 
-        part.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        part.requester.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        part.project_id.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      const matchesWorkflow = !filterWorkflow || part.workflow === filterWorkflow;
-      const matchesStatus = !filterStatus || part.status === filterStatus;
-      
-      return matchesSearch && matchesWorkflow && matchesStatus;
-    });
-  }  async function downloadFile(fileName, partId, currentStatus) {
+  }async function downloadFile(fileName, partId, currentStatus) {
     try {
       console.log('Attempting to download file:', fileName);
       console.log('Part ID:', partId, 'Status:', currentStatus);
@@ -146,16 +131,104 @@
     return new Date(dateString).toLocaleDateString();
   }
 
-  $: {
-    filterParts();
-  }
+  async function exportToCSV() {
+    try {
+      // Fetch all parts data
+      const { data, error } = await supabase
+        .from('parts')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        alert('No parts data to export.');
+        return;
+      }
+      
+      // Define CSV headers
+      const headers = [
+        'ID',
+        'Name',
+        'Requester',
+        'Project ID',
+        'Workflow',
+        'Quantity',
+        'Material',
+        'Status',
+        'File Name',
+        'Kitting Bin',
+        'Delivered',
+        'Created Date',
+        'Updated Date'
+      ];
+      
+      // Convert data to CSV format
+      const csvContent = [
+        headers.join(','), // Header row
+        ...data.map(part => [
+          part.id || '',
+          `"${(part.name || '').replace(/"/g, '""')}"`, // Escape quotes
+          `"${(part.requester || '').replace(/"/g, '""')}"`,
+          `"${(part.project_id || '').replace(/"/g, '""')}"`,
+          part.workflow || '',
+          part.quantity || 1,
+          `"${(part.material || '').replace(/"/g, '""')}"`,
+          part.status || '',
+          `"${(part.file_name || '').replace(/"/g, '""')}"`,
+          `"${(part.kitting_bin || '').replace(/"/g, '""')}"`,
+          part.delivered ? 'Yes' : 'No',
+          part.created_at ? new Date(part.created_at).toLocaleString() : '',
+          part.updated_at ? new Date(part.updated_at).toLocaleString() : ''
+        ].join(','))
+      ].join('\n');
+      
+      // Create and download the file
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      
+      link.setAttribute('href', url);
+      link.setAttribute('download', `parts_export_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+    } catch (error) {
+      console.error('Error exporting CSV:', error);
+      alert('Error exporting data. Please try again.');
+    }
+  }  // Reactive statement that filters parts when search term, filters, or parts array changes
+  $: filteredParts = parts.filter(part => {
+    const matchesSearch = !searchTerm || 
+      part.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      part.requester.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      part.project_id.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesWorkflow = !filterWorkflow || part.workflow === filterWorkflow;
+    const matchesStatus = !filterStatus || part.status === filterStatus;
+    
+    return matchesSearch && matchesWorkflow && matchesStatus;
+  });
 </script>
 
 <svelte:head>
   <title>Parts List - Manufacturing Management</title>
 </svelte:head>
 
-<h1>Parts List</h1>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+  <h1>Parts List</h1>
+  <button
+    class="btn btn-secondary"
+    on:click={exportToCSV}
+    style="display: flex; align-items: center; gap: 8px;"
+  >
+    <Download size={16} />
+    Export CSV
+  </button>
+</div>
 
 <div class="card">
   <div class="filters">
