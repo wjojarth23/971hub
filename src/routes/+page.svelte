@@ -1,0 +1,294 @@
+<script>
+  import { supabase } from '$lib/supabase.js';
+  import { Upload, FileText, Wrench, Zap } from 'lucide-svelte';
+  
+  let partName = '';
+  let requesterName = '';
+  let projectId = '';
+  let workflow = '';
+  let uploadedFile = null;
+  let isSubmitting = false;
+
+  const workflows = [
+    { id: 'laser-cut', name: 'Laser Cut', fileType: 'svg', icon: Zap, color: 'workflow-laser' },
+    { id: 'router', name: 'Router', fileType: 'step', icon: Wrench, color: 'workflow-router' },
+    { id: 'lathe', name: 'Lathe', fileType: 'pdf', icon: FileText, color: 'workflow-lathe' },
+    { id: 'mill', name: 'Mill', fileType: 'pdf', icon: FileText, color: 'workflow-mill' },
+    { id: '3d-print', name: '3D Print', fileType: 'stl', icon: Upload, color: 'workflow-3d-print' }
+  ];
+
+  $: selectedWorkflow = workflows.find(w => w.id === workflow);
+  $: requiredFileType = selectedWorkflow?.fileType || '';
+
+  function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (file) {
+      const fileExtension = file.name.split('.').pop().toLowerCase();
+      if (requiredFileType && fileExtension !== requiredFileType) {
+        alert(`Please upload a ${requiredFileType.toUpperCase()} file for ${selectedWorkflow.name} workflow.`);
+        event.target.value = '';
+        return;
+      }
+      uploadedFile = file;
+    }
+  }
+
+  function handleDragOver(event) {
+    event.preventDefault();
+    event.currentTarget.classList.add('active');
+  }
+
+  function handleDragLeave(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('active');
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('active');
+    
+    const files = event.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      const fileExtension = file.name.split('.').pop().toLowerCase();
+      if (requiredFileType && fileExtension !== requiredFileType) {
+        alert(`Please upload a ${requiredFileType.toUpperCase()} file for ${selectedWorkflow.name} workflow.`);
+        return;
+      }
+      uploadedFile = file;
+    }
+  }
+
+  async function handleSubmit() {
+    if (!partName || !requesterName || !projectId || !workflow || !uploadedFile) {
+      alert('Please fill in all fields and upload a file.');
+      return;
+    }
+
+    isSubmitting = true;
+    
+    try {
+      // Upload file to Supabase Storage
+      const fileExt = uploadedFile.name.split('.').pop();
+      const fileName = `${Date.now()}_${partName.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExt}`;
+      
+      console.log('Attempting to upload file:', fileName);
+      console.log('File size:', uploadedFile.size);
+      console.log('File type:', uploadedFile.type);
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('manufacturing-files')
+        .upload(fileName, uploadedFile);
+      
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        throw uploadError;
+      }
+      
+      console.log('Upload successful:', uploadData);
+      
+      // Save part data to database
+      const { data: insertData, error: insertError } = await supabase
+        .from('parts')
+        .insert([
+          {
+            name: partName,
+            requester: requesterName,
+            project_id: projectId,
+            workflow: workflow,
+            file_name: fileName,
+            file_url: fileName, // Store filename for compatibility, but we'll use file_name for downloads
+            status: 'pending',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+        ]);
+      
+      if (insertError) throw insertError;
+      
+      alert('Part request submitted successfully!');
+      
+      // Reset form
+      partName = '';
+      requesterName = '';
+      projectId = '';
+      workflow = '';
+      uploadedFile = null;
+      document.getElementById('file-input').value = '';
+      
+    } catch (error) {
+      console.error('Error submitting part request:', error);
+      
+      let errorMessage = 'Error submitting part request. ';
+      if (error.message?.includes('bucket')) {
+        errorMessage += 'Storage bucket not found. Please check your Supabase setup.';
+      } else if (error.message?.includes('policy')) {
+        errorMessage += 'Storage permissions issue. Please check your storage policies.';
+      } else if (error.message?.includes('authentication')) {
+        errorMessage += 'Authentication error. Please check your Supabase keys.';
+      } else {
+        errorMessage += `Details: ${error.message}`;
+      }
+      
+      alert(errorMessage);
+    } finally {
+      isSubmitting = false;
+    }
+  }
+</script>
+
+<svelte:head>
+  <title>Create Part - Manufacturing Management</title>
+</svelte:head>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h1 style="margin-bottom: 30px; color: var(--color-secondary);">Create New Part Request</h1>
+    
+    <form on:submit|preventDefault={handleSubmit}>
+      <div class="form-group">
+        <label for="part-name" class="form-label">Part Name</label>
+        <input
+          id="part-name"
+          type="text"
+          class="form-input"
+          bind:value={partName}
+          placeholder="Enter part name"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="requester" class="form-label">Requester Name</label>
+        <input
+          id="requester"
+          type="text"
+          class="form-input"
+          bind:value={requesterName}
+          placeholder="Enter your name"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="project-id" class="form-label">Project ID</label>
+        <input
+          id="project-id"
+          type="text"
+          class="form-input"
+          bind:value={projectId}
+          placeholder="Enter project ID"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="workflow" class="form-label">Manufacturing Process</label>
+        <select
+          id="workflow"
+          class="form-select"
+          bind:value={workflow}
+          required
+        >
+          <option value="">Select a workflow</option>
+          {#each workflows as wf}
+            <option value={wf.id}>{wf.name}</option>
+          {/each}
+        </select>
+      </div>
+
+      {#if selectedWorkflow}
+        <div class="form-group">
+          <label class="form-label">
+            Upload {selectedWorkflow.fileType.toUpperCase()} File
+            <span class="workflow-badge {selectedWorkflow.color}">
+              {selectedWorkflow.name}
+            </span>
+          </label>
+          
+          <div
+            class="file-input"
+            on:dragover={handleDragOver}
+            on:dragleave={handleDragLeave}
+            on:drop={handleDrop}
+            role="button"
+            tabindex="0"
+          >
+            <input
+              id="file-input"
+              type="file"
+              accept=".{selectedWorkflow.fileType}"
+              on:change={handleFileUpload}
+              style="display: none;"
+            />
+            
+            <div style="pointer-events: none;">
+              <Upload size={32} style="margin-bottom: 12px; color: var(--color-accent);" />
+              <p>
+                {#if uploadedFile}
+                  <strong>Selected:</strong> {uploadedFile.name}
+                {:else}
+                  Drop your {selectedWorkflow.fileType.toUpperCase()} file here or click to browse
+                {/if}
+              </p>
+              <p style="font-size: 12px; color: #666; margin-top: 8px;">
+                Only {selectedWorkflow.fileType.toUpperCase()} files are accepted
+              </p>
+            </div>
+            
+            <button
+              type="button"
+              class="btn btn-outline"
+              style="margin-top: 12px; pointer-events: auto;"
+              on:click={() => document.getElementById('file-input').click()}
+            >
+              Browse Files
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <button
+        type="submit"
+        class="btn btn-primary"
+        style="width: 100%; margin-top: 20px;"
+        disabled={isSubmitting}
+      >
+        {#if isSubmitting}
+          Submitting...
+        {:else}
+          Submit Part Request
+        {/if}
+      </button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom: 20px; color: var(--color-secondary);">Manufacturing Workflows</h2>
+    
+    <div class="grid">
+      {#each workflows as wf}
+        <div class="card" style="padding: 16px; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+            <svelte:component this={wf.icon} size={20} />
+            <h3 style="margin: 0; font-size: 16px;">{wf.name}</h3>
+            <span class="workflow-badge {wf.color}">{wf.fileType.toUpperCase()}</span>
+          </div>
+          <p style="font-size: 14px; color: #666; margin: 0;">
+            {#if wf.id === 'laser-cut'}
+              Vector-based cutting using laser technology. Requires SVG files with proper paths.
+            {:else if wf.id === 'router'}
+              CNC routing for precise cuts and shapes. Requires STEP files with 3D geometry.
+            {:else if wf.id === 'lathe'}
+              Rotational machining for cylindrical parts. Requires PDF technical drawings.
+            {:else if wf.id === 'mill'}
+              Multi-axis milling for complex geometries. Requires PDF technical drawings.
+            {:else if wf.id === '3d-print'}
+              Additive manufacturing layer by layer. Requires STL mesh files.
+            {/if}
+          </p>
+        </div>
+      {/each}
+    </div>
+  </div>
+</div>
