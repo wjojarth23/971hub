@@ -48,6 +48,8 @@ CREATE TABLE parts (
   requester TEXT NOT NULL,
   project_id TEXT NOT NULL,
   workflow TEXT NOT NULL CHECK (workflow IN ('laser-cut', 'router', 'lathe', 'mill', '3d-print')),
+  quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  material TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in-progress', 'complete')),
   file_name TEXT NOT NULL,
   file_url TEXT NOT NULL,
@@ -184,3 +186,17 @@ The application uses a custom color scheme defined in CSS variables:
 3. Set environment variables in your deployment platform
 4. Update Supabase CORS settings if needed
 5. Review and tighten security policies
+
+### Migration for Existing Databases
+
+If you already have a parts table and need to add the new quantity and material fields, run this migration:
+
+```sql
+-- Add quantity and material columns to existing parts table
+ALTER TABLE parts 
+ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+ADD COLUMN material TEXT NOT NULL DEFAULT '';
+
+-- Update any existing parts to have a default material value
+UPDATE parts SET material = 'Not specified' WHERE material = '';
+```

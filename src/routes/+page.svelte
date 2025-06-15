@@ -6,6 +6,8 @@
   let requesterName = '';
   let projectId = '';
   let workflow = '';
+  let quantity = 1;
+  let material = '';
   let uploadedFile = null;
   let isSubmitting = false;
 
@@ -17,8 +19,27 @@
     { id: '3d-print', name: '3D Print', fileType: 'stl', icon: Upload, color: 'workflow-3d-print' }
   ];
 
+  const materialOptions = {
+    'lathe': ['1/2" Thunderhex', '3/8" Thunderhex'],
+    'mill': ['Aluminum', 'Steel', 'Delrin'],
+    'router': [
+      '1/8" Polycarbonate', '1/4" Polycarbonate', '3/8" Polycarbonate',
+      '1/8" SSRP', '1/4" SSRP', '3/8" SSRP',
+      '1/8" Plywood', '1/4" Plywood', '3/8" Plywood',
+      '1/16" Aluminum', '1/8" Aluminum', '1/4" Aluminum', '3/8" Aluminum',
+      '1x2 1/16" Tube', '1x1 1/16" Tube', '1x2 1/8" Tube', '1x1 1/8" Tube'
+    ],
+    '3d-print': ['PLA', 'ABS', 'PETG', 'PETG-CF'],
+    'laser-cut': [
+      '1/8" Polycarbonate', '1/4" Polycarbonate', '3/8" Polycarbonate',
+      '1/8" SSRP', '1/4" SSRP', '3/8" SSRP',
+      '1/8" Plywood', '1/4" Plywood', '3/8" Plywood'
+    ]
+  };
+
   $: selectedWorkflow = workflows.find(w => w.id === workflow);
   $: requiredFileType = selectedWorkflow?.fileType || '';
+  $: availableMaterials = workflow ? materialOptions[workflow] || [] : [];
 
   function handleFileUpload(event) {
     const file = event.target.files[0];
@@ -60,8 +81,8 @@
   }
 
   async function handleSubmit() {
-    if (!partName || !requesterName || !projectId || !workflow || !uploadedFile) {
-      alert('Please fill in all fields and upload a file.');
+    if (!partName || !requesterName || !projectId || !workflow || !material || !uploadedFile || !quantity || quantity < 1) {
+      alert('Please fill in all fields, select a material, upload a file, and specify a valid quantity.');
       return;
     }
 
@@ -96,6 +117,8 @@
             requester: requesterName,
             project_id: projectId,
             workflow: workflow,
+            quantity: quantity,
+            material: material,
             file_name: fileName,
             file_url: fileName, // Store filename for compatibility, but we'll use file_name for downloads
             status: 'pending',
@@ -113,6 +136,8 @@
       requesterName = '';
       projectId = '';
       workflow = '';
+      quantity = 1;
+      material = '';
       uploadedFile = null;
       document.getElementById('file-input').value = '';
       
@@ -183,6 +208,23 @@
       </div>
 
       <div class="form-group">
+        <label for="quantity" class="form-label">Quantity</label>
+        <input
+          id="quantity"
+          type="number"
+          class="form-input"
+          bind:value={quantity}
+          placeholder="Enter quantity (e.g., 8)"
+          min="1"
+          max="1000"
+          required
+        />
+        <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
+          Specify how many of this part you need (e.g., 8x for eight pieces)
+        </small>
+      </div>
+
+      <div class="form-group">
         <label for="workflow" class="form-label">Manufacturing Process</label>
         <select
           id="workflow"
@@ -196,6 +238,29 @@
           {/each}
         </select>
       </div>
+
+      {#if workflow}
+        <div class="form-group">
+          <label for="material" class="form-label">Material</label>
+          <input
+            id="material"
+            type="text"
+            class="form-input"
+            bind:value={material}
+            list="material-options"
+            placeholder="Select or type material"
+            required
+          />
+          <datalist id="material-options">
+            {#each availableMaterials as mat}
+              <option value={mat}></option>
+            {/each}
+          </datalist>
+          <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
+            Select from common materials or type your own
+          </small>
+        </div>
+      {/if}
 
       {#if selectedWorkflow}
         <div class="form-group">

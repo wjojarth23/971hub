@@ -223,11 +223,14 @@
           <div class="status-badge status-{part.status}">
             {part.status}
           </div>
-        </div>
-          <div class="part-details">
+        </div>          <div class="part-details">
           <p><strong>Requester:</strong> {part.requester}</p>
           <p><strong>Project ID:</strong> {part.project_id}</p>
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>          {#if part.file_name}
+          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>
+          {#if part.material}
+            <p><strong>Material:</strong> {part.material}</p>
+          {/if}
+          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>{#if part.file_name}
             <p><strong>File:</strong> 
               <button 
                 class="file-link" 
