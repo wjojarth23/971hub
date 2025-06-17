@@ -102,20 +102,21 @@
       subsystems = subsystems.map(subsystem => ({
         ...subsystem,
         lead_user: subsystem.lead_user_id ? userProfiles[subsystem.lead_user_id] || null : null
-      }));
-
-      // Load OnShape data for subsystems with linked documents
+      }));      // Load OnShape data for subsystems with linked documents
       for (const subsystem of subsystems) {
         if (subsystem.onshape_document_id && onShapeAPI.accessKey && onShapeAPI.secretKey) {
           try {
-            const releases = await onShapeAPI.getDocumentReleases(subsystem.onshape_document_id);
-            onshapeData[subsystem.id] = { releases: releases || [] };
+            const docInfo = await onShapeAPI.getDocumentInfo(subsystem.onshape_document_id);
+            onshapeData[subsystem.id] = { 
+              docInfo: docInfo || null,
+              releases: [] // Placeholder until we find the correct releases endpoint
+            };
           } catch (error) {
             console.error(`Error loading OnShape data for ${subsystem.name}:`, error);
-            onshapeData[subsystem.id] = { releases: [] };
+            onshapeData[subsystem.id] = { docInfo: null, releases: [] };
           }
         } else if (subsystem.onshape_document_id) {
-          onshapeData[subsystem.id] = { releases: [] };
+          onshapeData[subsystem.id] = { docInfo: null, releases: [] };
         }
       }
     } catch (error) {
@@ -535,6 +536,87 @@
   function isSubsystemLead(subsystem) {
     return subsystem.lead_user_id === user?.id;
   }
+
+  async function createBuildFromDocument(subsystem) {
+    if (!subsystem.onshape_document_id || !subsystem.onshape_workspace_id || !subsystem.onshape_element_id) {
+      alert('OnShape document information is incomplete. Please re-link the document.');
+      return;
+    }
+
+    loadingBuild = true;
+    try {
+      // Create a build from the current document state
+      const buildHash = `${subsystem.onshape_document_id}_${Date.now()}`;
+      
+      const { data: build, error } = await supabase
+        .from('builds')
+        .insert([{
+          subsystem_id: subsystem.id,
+          release_id: 'current',
+          release_name: `Current State - ${new Date().toLocaleDateString()}`,
+          build_hash: buildHash,
+          created_by: user.id,
+          status: 'pending'
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Try to get assembly info and create BOM
+      try {
+        const assemblyInfo = await onShapeAPI.getAssemblyInfo(
+          subsystem.onshape_document_id,
+          subsystem.onshape_workspace_id,
+          subsystem.onshape_element_id
+        );
+
+        // For now, create a placeholder BOM entry
+        await supabase
+          .from('build_bom')
+          .insert([{
+            build_id: build.id,
+            part_name: `${subsystem.name} Assembly`,
+            part_number: subsystem.onshape_document_id,
+            quantity: 1,
+            part_type: 'manufactured',
+            material: 'Mixed',
+            workflow: 'assembly',
+            onshape_part_id: subsystem.onshape_element_id,
+            status: 'pending'
+          }]);
+
+      } catch (apiError) {
+        console.warn('Could not fetch assembly info, created build without detailed BOM:', apiError);
+      }
+
+      await loadBuilds();
+      alert('Build created successfully!');
+      
+    } catch (error) {
+      console.error('Error creating build:', error);
+      alert('Failed to create build: ' + error.message);
+    } finally {
+      loadingBuild = false;
+    }
+  }
+
+  function viewDocumentDetails(subsystem) {
+    if (onshapeData[subsystem.id]?.docInfo) {
+      const docInfo = onshapeData[subsystem.id].docInfo;
+      const details = [
+        `Name: ${docInfo.name || 'Unknown'}`,
+        `Modified: ${docInfo.modifiedAt ? new Date(docInfo.modifiedAt).toLocaleString() : 'Unknown'}`,
+        `Created: ${docInfo.createdAt ? new Date(docInfo.createdAt).toLocaleString() : 'Unknown'}`,
+        `Owner: ${docInfo.owner || 'Unknown'}`,
+        `Public: ${docInfo.public ? 'Yes' : 'No'}`
+      ].join('\n');
+      
+      alert(`OnShape Document Details:\n\n${details}`);
+    } else {
+      alert('Document details not available. Try refreshing the page.');
+    }
+  }
 </script>
 
 <svelte:head>
@@ -560,11 +642,13 @@
         <Plus size={16} />
         Create Subsystem
       </button>
-    </div>
-
-    <div class="subsystems-grid">
+    </div>    <div class="subsystems-grid">
       {#each subsystems as subsystem}
-        <div class="subsystem-card">
+        <div 
+          class="subsystem-card" 
+          class:clickable={subsystem.onshape_url}
+          on:click={() => subsystem.onshape_url && goto(`/cad/${subsystem.id}`)}
+        >
           <div class="subsystem-header">
             <h3>{subsystem.name}</h3>
             <div class="subsystem-badges">
@@ -585,54 +669,43 @@
             <div class="info-item">
               <Users size={16} />
               <span>{subsystem.subsystem_members.length} member{subsystem.subsystem_members.length !== 1 ? 's' : ''}</span>
-            </div>            {#if subsystem.lead_user}
-              <div class="info-item">                <span class="lead-label">Lead:</span>
+            </div>
+            {#if subsystem.lead_user}
+              <div class="info-item">
+                <span class="lead-label">Lead:</span>
                 <span>{subsystem.lead_user?.full_name?.split(' ')[0] || subsystem.lead_user?.email || 'Unknown'}</span>
               </div>
             {/if}
-          </div>          {#if subsystem.onshape_url}
+          </div>
+
+          {#if subsystem.onshape_url}
             <div class="onshape-section">
               <div class="onshape-header">
                 <Link size={16} />
                 <span>OnShape Document</span>
-                <a href={subsystem.onshape_url} target="_blank" class="external-link">
+                <a 
+                  href={subsystem.onshape_url} 
+                  target="_blank" 
+                  class="external-link"
+                  on:click|stopPropagation
+                >
                   <ExternalLink size={14} />
                 </a>
               </div>
-              
-              {#if onshapeData[subsystem.id]?.releases?.length > 0}
-                <div class="releases-section">
-                  <h4>Releases</h4>
-                  <div class="releases-list">
-                    {#each onshapeData[subsystem.id].releases as release}
-                      <div class="release-item">
-                        <div class="release-info">
-                          <span class="release-name">{release.name}</span>
-                          <span class="release-date">{new Date(release.createdTime).toLocaleDateString()}</span>
-                        </div>
-                        {#if isSubsystemMember(subsystem)}
-                          <button 
-                            class="btn btn-build" 
-                            on:click={() => createBuildFromRelease(subsystem.id, release)}
-                            disabled={loadingBuild}
-                          >
-                            {#if loadingBuild}
-                              <div class="spinner-small"></div>
-                            {:else}
-                              <Settings size={14} />
-                            {/if}
-                            Build
-                          </button>
-                        {/if}
-                      </div>
-                    {/each}
+                <div class="onshape-info">
+                {#if onshapeData[subsystem.id]?.docInfo}
+                  <div class="document-info">
+                    <span class="doc-name">{onshapeData[subsystem.id].docInfo.name || 'Document'}</span>
                   </div>
+                {/if}
+                <div class="click-hint">
+                  <span>Click to view timeline and create builds</span>
                 </div>
-              {/if}
+              </div>
             </div>
           {/if}
 
-          <div class="subsystem-actions">
+          <div class="subsystem-actions" on:click|stopPropagation>
             {#if isSubsystemLead(subsystem)}
               {#if !subsystem.onshape_url}
                 <button 
@@ -1017,6 +1090,17 @@
     transition: all 0.2s ease;
   }
 
+  .subsystem-card.clickable {
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .subsystem-card.clickable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: var(--primary);
+  }
+
   .subsystem-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -1333,14 +1417,64 @@
     color: var(--primary);
   }
 
-  .status-ready_to_assemble {
-    background: var(--success);
-    color: var(--primary);
+  .onshape-actions {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
-  .status-assembled {
-    background: var(--secondary);
-    color: var(--primary);
+  .document-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    background: var(--background);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .doc-name {
+    font-weight: 500;
+    color: var(--text);
+    font-size: 0.875rem;
+  }
+
+  .doc-date {
+    font-size: 0.875rem;
+    color: var(--secondary);
+  }
+
+  .onshape-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-sm {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  .btn-outline:hover {
+    background: var(--background);
+    border-color: var(--primary);
+  }
+
+  .click-hint {
+    margin-top: 0.5rem;
+  }
+
+  .click-hint span {
+    font-size: 0.75rem;
+    color: var(--secondary);
+    font-style: italic;
   }
 
   /* ...existing styles... */

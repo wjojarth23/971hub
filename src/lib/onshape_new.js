@@ -23,7 +23,9 @@ class OnShapeAPI {
             };
         }
         return null;
-    }    // Get document information
+    }
+
+    // Get document information
     async getDocumentInfo(documentId) {
         try {
             const response = await fetch(`${this.apiRoute}?action=document-info&documentId=${documentId}`);
@@ -39,34 +41,7 @@ class OnShapeAPI {
         }
     }
 
-    // Get assembly information (replaces releases/versions for now)
-    async getAssemblyInfo(documentId, workspaceId, elementId) {
-        try {
-            const params = new URLSearchParams({
-                action: 'assembly-info',
-                documentId,
-                workspaceId,
-                elementId
-            });
-            
-            const response = await fetch(`${this.apiRoute}?${params}`);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            return await response.json();
-        } catch (error) {
-            console.error('Error fetching assembly info:', error);
-            throw error;
-        }
-    }    // Get document releases (placeholder - endpoint may not exist)
-    async getDocumentReleases(documentId) {
-        console.warn('Document releases endpoint may not be available in OnShape API v11. Using empty array.');
-        return [];
-    }
-
-    // Get document versions  
+    // Get document versions
     async getDocumentVersions(documentId) {
         try {
             const response = await fetch(`${this.apiRoute}?action=versions&documentId=${documentId}`);
@@ -82,16 +57,30 @@ class OnShapeAPI {
         }
     }
 
+    // Get document releases
+    async getDocumentReleases(documentId) {
+        try {
+            const response = await fetch(`${this.apiRoute}?action=releases&documentId=${documentId}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching document releases:', error);
+            throw error;
+        }
+    }
+
     // Get assembly BOM
-    async getAssemblyBOM(documentId, workspaceId, elementId, wvm = 'w', wvmid = null) {
+    async getAssemblyBOM(documentId, workspaceId, elementId) {
         try {
             const params = new URLSearchParams({
                 action: 'assembly-bom',
                 documentId,
                 workspaceId,
-                elementId,
-                wvm,
-                wvmid: wvmid || workspaceId
+                elementId
             });
             
             const response = await fetch(`${this.apiRoute}?${params}`);
@@ -105,10 +94,30 @@ class OnShapeAPI {
             console.error('Error fetching assembly BOM:', error);
             throw error;
         }
-    }// Placeholder for part properties (not available in current API endpoint structure)
+    }
+
+    // Get part properties
     async getPartProperties(documentId, workspaceId, elementId, partId) {
-        console.warn('Part properties endpoint not available in current OnShape API structure. Using empty object.');
-        return {};
+        try {
+            const params = new URLSearchParams({
+                action: 'part-properties',
+                documentId,
+                workspaceId,
+                elementId,
+                partId
+            });
+            
+            const response = await fetch(`${this.apiRoute}?${params}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching part properties:', error);
+            throw error;
+        }
     }
 
     // Analyze BOM and categorize parts

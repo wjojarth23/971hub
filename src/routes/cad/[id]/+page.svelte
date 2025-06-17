@@ -1,0 +1,852 @@
+<script>
+  import { page } from '$app/stores';
+  import { onMount } from 'svelte';
+  import { supabase } from '$lib/supabase.js';
+  import { userStore } from '$lib/stores/user.js';
+  import { onShapeAPI } from '$lib/onshape.js';
+  import { goto } from '$app/navigation';
+  import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy } from 'lucide-svelte';
+
+  let subsystemId = $page.params.id;
+  let user = null;
+  let loading = true;
+  let subsystem = null;
+  let timeline = [];
+  let selectedVersion = null;
+  let showBuildModal = false;
+  let buildBOM = [];
+  let stockTypes = [];
+  let loadingBOM = false;
+  let loadingBuild = false;
+
+  onMount(async () => {
+    // Check authentication
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      goto('/');
+      return;
+    }
+
+    userStore.subscribe(value => {
+      user = value;
+    });
+
+    await loadSubsystem();
+    await loadStockTypes();
+  });
+
+  async function loadSubsystem() {
+    try {
+      const { data, error } = await supabase
+        .from('subsystems')
+        .select(`
+          *,
+          subsystem_members(user_id)
+        `)
+        .eq('id', subsystemId)
+        .single();
+
+      if (error) throw error;
+      subsystem = data;
+
+      if (subsystem.onshape_document_id) {
+        await loadTimeline();
+      }
+    } catch (error) {
+      console.error('Error loading subsystem:', error);
+      goto('/cad');
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function loadTimeline() {
+    try {
+      // Get document versions and releases
+      const [versions, releases] = await Promise.all([
+        onShapeAPI.getDocumentVersions(subsystem.onshape_document_id),
+        onShapeAPI.getDocumentReleases(subsystem.onshape_document_id)
+      ]);
+
+      // Combine and sort by date
+      const timelineItems = [
+        ...versions.map(v => ({ ...v, type: 'version', date: new Date(v.createdAt) })),
+        ...releases.map(r => ({ ...r, type: 'release', date: new Date(r.createdAt) }))
+      ].sort((a, b) => b.date - a.date);
+
+      timeline = timelineItems;
+    } catch (error) {
+      console.error('Error loading timeline:', error);
+      timeline = [];
+    }
+  }
+
+  async function loadStockTypes() {
+    try {
+      const { data, error } = await supabase
+        .from('stock_types')
+        .select('*');
+
+      if (error) throw error;
+      stockTypes = data || [];
+    } catch (error) {
+      console.error('Error loading stock types:', error);
+    }
+  }
+
+  async function createBuildFromRelease(release) {
+    selectedVersion = release;
+    loadingBOM = true;
+    showBuildModal = true;
+
+    try {
+      // Get BOM from OnShape
+      const bom = await onShapeAPI.getAssemblyBOM(
+        subsystem.onshape_document_id,
+        release.workspaceId || subsystem.onshape_workspace_id,
+        subsystem.onshape_element_id
+      );
+
+      // Analyze and categorize BOM
+      buildBOM = await analyzeBOM(bom);
+      buildBOM = await autoAssignStock(buildBOM);
+
+    } catch (error) {
+      console.error('Error loading BOM:', error);
+      alert('Failed to load BOM: ' + error.message);
+      showBuildModal = false;
+    } finally {
+      loadingBOM = false;
+    }
+  }
+
+  async function analyzeBOM(bom) {
+    const analyzedParts = [];
+    
+    for (const item of bom.bomTable?.items || []) {
+      let partType = 'manufactured';
+      let material = '';
+      let workflow = '';
+      
+      // Simple heuristics for part categorization
+      const partName = (item.item || '').toLowerCase();
+      if (partName.includes('screw') || partName.includes('bolt') || 
+          partName.includes('nut') || partName.includes('washer') ||
+          partName.includes('bearing') || partName.includes('motor') ||
+          partName.includes('sensor') || partName.includes('wire')) {
+        partType = 'COTS';
+      } else {
+        // Try to get part properties for better categorization
+        try {
+          const properties = await onShapeAPI.getPartProperties(
+            subsystem.onshape_document_id,
+            selectedVersion.workspaceId || subsystem.onshape_workspace_id,
+            subsystem.onshape_element_id,
+            item.partId
+          );
+          
+          if (properties.material) {
+            material = properties.material;
+            
+            // Determine workflow based on material
+            if (material.toLowerCase().includes('aluminum') || material.toLowerCase().includes('steel')) {
+              workflow = 'mill';
+            } else if (material.toLowerCase().includes('wood') || material.toLowerCase().includes('mdf')) {
+              workflow = 'laser-cut';
+            } else if (material.toLowerCase().includes('plastic') || material.toLowerCase().includes('pla')) {
+              workflow = '3d-print';
+            } else {
+              workflow = 'mill'; // default
+            }
+          }
+        } catch (propError) {
+          console.warn('Could not fetch part properties:', propError);
+          workflow = 'mill'; // default
+        }
+      }
+      
+      analyzedParts.push({
+        part_name: item.item || 'Unknown Part',
+        part_number: item.partNumber || '',
+        quantity: item.quantity || 1,
+        part_type: partType,
+        material: material,
+        workflow: workflow,
+        onshape_part_id: item.partId || '',
+        bounding_box_x: item.boundingBox?.x || null,
+        bounding_box_y: item.boundingBox?.y || null,
+        bounding_box_z: item.boundingBox?.z || null,
+        stock_assignment: '',
+        status: 'pending'
+      });
+    }
+    
+    return analyzedParts;
+  }
+
+  async function autoAssignStock(parts) {
+    for (const part of parts) {
+      if (part.part_type === 'manufactured' && part.material) {
+        // Find matching stock type
+        const matchingStock = stockTypes.find(stock => 
+          stock.material.toLowerCase().includes(part.material.toLowerCase()) &&
+          stock.workflow === part.workflow
+        );
+        
+        if (matchingStock) {
+          part.stock_assignment = `${matchingStock.material} - ${matchingStock.stock_type}`;
+        }
+      }
+    }
+    
+    return parts;
+  }
+
+  async function confirmBuild() {
+    loadingBuild = true;
+    try {
+      const buildHash = `${subsystem.onshape_document_id}_${selectedVersion.id}_${Date.now()}`;
+      
+      const { data: build, error } = await supabase
+        .from('builds')
+        .insert([{
+          subsystem_id: subsystem.id,
+          release_id: selectedVersion.id,
+          release_name: selectedVersion.name,
+          build_hash: buildHash,
+          created_by: user.id,
+          status: 'pending'
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Insert BOM items
+      const bomItems = buildBOM.map(item => ({
+        ...item,
+        build_id: build.id
+      }));
+
+      const { error: bomError } = await supabase
+        .from('build_bom')
+        .insert(bomItems);
+
+      if (bomError) throw bomError;
+
+      alert('Build created successfully!');
+      showBuildModal = false;
+      
+    } catch (error) {
+      console.error('Error creating build:', error);
+      alert('Failed to create build: ' + error.message);
+    } finally {
+      loadingBuild = false;
+    }
+  }
+
+  async function addAllCOTSToPurchasing() {
+    const cotsItems = buildBOM.filter(item => item.part_type === 'COTS');
+    // Placeholder for now
+    alert(`Would add ${cotsItems.length} COTS items to purchasing`);
+  }
+
+  async function manufactureIteration() {
+    // Check for duplicate parts from previous builds of same subsystem
+    try {
+      const { data: previousBuilds, error } = await supabase
+        .from('builds')
+        .select(`
+          id,
+          build_bom(part_name, part_number, material, workflow)
+        `)
+        .eq('subsystem_id', subsystem.id)
+        .neq('status', 'pending');
+
+      if (error) throw error;
+
+      const existingParts = new Set();
+      previousBuilds.forEach(build => {
+        build.build_bom.forEach(item => {
+          existingParts.add(`${item.part_name}_${item.part_number}_${item.material}_${item.workflow}`);
+        });
+      });
+
+      const newParts = buildBOM.filter(item => 
+        item.part_type === 'manufactured' &&
+        !existingParts.has(`${item.part_name}_${item.part_number}_${item.material}_${item.workflow}`)
+      );
+
+      alert(`Would add ${newParts.length} new manufactured parts to parts list`);
+    } catch (error) {
+      console.error('Error checking for duplicates:', error);
+      alert('Error checking for duplicate parts');
+    }
+  }
+
+  async function buildDuplicate() {
+    const manufacturedItems = buildBOM.filter(item => item.part_type === 'manufactured');
+    alert(`Would add all ${manufacturedItems.length} manufactured parts to parts list`);
+  }
+
+  function isSubsystemMember() {
+    return subsystem?.subsystem_members?.some(member => member.user_id === user?.id);
+  }
+</script>
+
+<svelte:head>
+  <title>{subsystem?.name || 'Subsystem'} Timeline - 971 Hub</title>
+</svelte:head>
+
+{#if loading}
+  <div class="loading-container">
+    <div class="loading-spinner"></div>
+    <p>Loading subsystem...</p>
+  </div>
+{:else if subsystem}
+  <main class="main-content">
+    <header class="page-header">
+      <div class="header-content">
+        <button class="back-button" on:click={() => goto('/cad')}>
+          <ArrowLeft size={20} />
+          Back to CAD
+        </button>
+        <div class="header-info">
+          <h1>{subsystem.name}</h1>
+          {#if subsystem.description}
+            <p class="subsystem-description">{subsystem.description}</p>
+          {/if}
+        </div>
+      </div>
+    </header>
+
+    {#if subsystem.onshape_document_id}
+      <section class="timeline-section">
+        <h2>OnShape Timeline</h2>
+        <div class="timeline-container">
+          <div class="timeline">
+            {#each timeline as item}
+              <div class="timeline-item" class:release={item.type === 'release'}>
+                <div class="timeline-marker">
+                  {#if item.type === 'release'}
+                    <Triangle size={12} />
+                  {:else}
+                    <Circle size={8} />
+                  {/if}
+                </div>
+                <div class="timeline-content">
+                  <div class="timeline-header">
+                    <span class="timeline-name">{item.name}</span>
+                    <span class="timeline-date">{item.date.toLocaleDateString()}</span>
+                  </div>
+                  {#if item.description}
+                    <p class="timeline-description">{item.description}</p>
+                  {/if}
+                  {#if item.type === 'release' && isSubsystemMember()}
+                    <button 
+                      class="btn btn-primary btn-sm"
+                      on:click={() => createBuildFromRelease(item)}
+                    >
+                      <Settings size={14} />
+                      Create Build
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </section>
+    {:else}
+      <div class="no-onshape">
+        <p>This subsystem is not linked to an OnShape document.</p>
+      </div>
+    {/if}
+  </main>
+
+  <!-- Build Modal -->
+  {#if showBuildModal}
+    <div class="modal-overlay">
+      <div class="modal modal-large">
+        <div class="modal-header">
+          <h2>Build BOM - {selectedVersion?.name}</h2>
+          <button class="close-btn" on:click={() => showBuildModal = false}>×</button>
+        </div>
+        
+        <div class="modal-content">
+          {#if loadingBOM}
+            <div class="loading-container">
+              <div class="loading-spinner"></div>
+              <p>Loading BOM...</p>
+            </div>
+          {:else}
+            <div class="bom-actions">
+              <button class="btn btn-warning" on:click={addAllCOTSToPurchasing}>
+                <ShoppingCart size={16} />
+                Add All COTS to Purchasing
+              </button>
+              <button class="btn btn-primary" on:click={manufactureIteration}>
+                <Zap size={16} />
+                Manufacture Iteration
+              </button>
+              <button class="btn btn-secondary" on:click={buildDuplicate}>
+                <Copy size={16} />
+                Build Duplicate
+              </button>
+            </div>
+
+            <div class="bom-table-container">
+              <table class="bom-table">
+                <thead>
+                  <tr>
+                    <th>Part Name</th>
+                    <th>Part Number</th>
+                    <th>Qty</th>
+                    <th>Type</th>
+                    <th>Material</th>
+                    <th>Workflow</th>
+                    <th>Stock Assignment</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each buildBOM as item, index}
+                    <tr>
+                      <td>{item.part_name}</td>
+                      <td>{item.part_number || '-'}</td>
+                      <td>{item.quantity}</td>
+                      <td>
+                        <span class="type-badge type-{item.part_type.toLowerCase()}">
+                          {item.part_type}
+                        </span>
+                      </td>
+                      <td>{item.material || '-'}</td>
+                      <td>{item.workflow || '-'}</td>
+                      <td>
+                        <select bind:value={item.stock_assignment}>
+                          <option value="">Select Stock</option>
+                          {#each stockTypes as stock}
+                            <option value="{stock.material} - {stock.stock_type}">
+                              {stock.material} - {stock.stock_type}
+                            </option>
+                          {/each}
+                        </select>
+                      </td>
+                      <td>
+                        <button class="btn btn-sm btn-outline">
+                          <Plus size={14} />
+                          Add
+                        </button>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="modal-actions">
+              <button class="btn btn-secondary" on:click={() => showBuildModal = false}>
+                Cancel
+              </button>
+              <button 
+                class="btn btn-primary" 
+                on:click={confirmBuild}
+                disabled={loadingBuild}
+              >
+                {#if loadingBuild}
+                  <div class="spinner-small"></div>
+                {:else}
+                  <Settings size={16} />
+                {/if}
+                Create Build
+              </button>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
+{:else}
+  <div class="error-container">
+    <h2>Subsystem Not Found</h2>
+    <p>The requested subsystem could not be found.</p>
+    <button class="btn btn-primary" on:click={() => goto('/cad')}>
+      Back to CAD
+    </button>
+  </div>
+{/if}
+
+<style>
+  .main-content {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+
+  .page-header {
+    margin-bottom: 2rem;
+  }
+
+  .header-content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .back-button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+  }
+
+  .back-button:hover {
+    background: var(--background);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .header-info h1 {
+    margin: 0;
+    color: var(--text);
+    font-size: 2rem;
+    font-weight: 600;
+  }
+
+  .subsystem-description {
+    margin: 0.5rem 0 0 0;
+    color: var(--secondary);
+  }
+
+  .timeline-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+
+  .timeline-section h2 {
+    margin: 0 0 1.5rem 0;
+    color: var(--text);
+    font-size: 1.5rem;
+    font-weight: 600;
+  }
+
+  .timeline {
+    position: relative;
+    padding-left: 2rem;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 0.75rem;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+  }
+
+  .timeline-item {
+    position: relative;
+    margin-bottom: 2rem;
+    padding-left: 2rem;
+  }
+
+  .timeline-marker {
+    position: absolute;
+    left: -2rem;
+    top: 0.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    color: var(--secondary);
+  }
+
+  .timeline-item.release .timeline-marker {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--surface);
+  }
+
+  .timeline-content {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+
+  .timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .timeline-name {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .timeline-date {
+    font-size: 0.875rem;
+    color: var(--secondary);
+  }
+
+  .timeline-description {
+    margin: 0.5rem 0;
+    color: var(--secondary);
+    font-size: 0.875rem;
+  }
+
+  .no-onshape {
+    text-align: center;
+    padding: 3rem;
+    color: var(--secondary);
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal {
+    background: var(--surface);
+    border-radius: 12px;
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-large {
+    width: 1200px;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    color: var(--text);
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+  }
+
+  .close-btn:hover {
+    background: var(--background);
+    color: var(--text);
+  }
+
+  .modal-content {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .bom-actions {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bom-table-container {
+    overflow-x: auto;
+    margin-bottom: 1.5rem;
+  }
+
+  .bom-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  .bom-table th,
+  .bom-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bom-table th {
+    background: var(--background);
+    font-weight: 500;
+    color: var(--secondary);
+  }
+
+  .type-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .type-cots {
+    background: var(--warning);
+    color: var(--primary);
+  }
+
+  .type-manufactured {
+    background: var(--success);
+    color: var(--primary);
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn:hover {
+    background: var(--background);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--surface);
+  }
+
+  .btn-primary:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--surface);
+    opacity: 0.9;
+  }
+
+  .btn-secondary {
+    background: var(--secondary);
+    border-color: var(--secondary);
+    color: var(--surface);
+  }
+
+  .btn-warning {
+    background: var(--warning);
+    border-color: var(--warning);
+    color: var(--primary);
+  }
+
+  .btn-outline {
+    background: transparent;
+    border-color: var(--border);
+  }
+
+  .btn-sm {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+  }
+
+  .loading-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    color: var(--secondary);
+  }
+
+  .loading-spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 2px solid var(--border);
+    border-top: 2px solid var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+
+  .spinner-small {
+    width: 1rem;
+    height: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-top: 1px solid currentColor;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .error-container {
+    text-align: center;
+    padding: 3rem;
+  }
+
+  .error-container h2 {
+    color: var(--text);
+    margin-bottom: 1rem;
+  }
+
+  .error-container p {
+    color: var(--secondary);
+    margin-bottom: 2rem;
+  }
+
+  select {
+    padding: 0.375rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.875rem;
+  }
+</style>
