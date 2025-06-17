@@ -1,8 +1,6 @@
 <script>  import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
-  import { userStore } from '$lib/stores/user.js';
-  import { LogIn, UserPlus, Mail, Lock, User, Shield, Briefcase, CheckCircle, AlertCircle, LogOut } from 'lucide-svelte';
-  import { goto } from '$app/navigation';
+  import { userStore } from '$lib/stores/user.js';  import { LogIn, UserPlus, Mail, Lock, User, Shield, Briefcase, CheckCircle, AlertCircle, LogOut } from 'lucide-svelte';  import { goto } from '$app/navigation';
   
   let user = null;
   let loading = true;
@@ -158,17 +156,7 @@
   </div>
 {:else if user}
   <!-- User Dashboard -->
-  <div class="dashboard-container">    <div class="dashboard-header">
-      <div class="brand">
-        <Briefcase size={32} />
-        <h1>971 Hub</h1>
-      </div>
-      <button class="btn btn-secondary" on:click={handleLogout}>
-        <LogOut size={16} />
-        Sign Out
-      </button>
-    </div>
-
+  <div class="dashboard-container">
     <div class="user-welcome">
       <h2>Welcome back, {user.full_name || user.email}!</h2>
       <div class="user-info">
@@ -709,9 +697,7 @@
     .action-grid {
       grid-template-columns: 1fr;
       gap: 1rem;
-    }
-
-    .action-card {
+    }    .action-card {
       padding: 1rem;
     }
   }
