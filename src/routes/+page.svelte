@@ -1,716 +1,718 @@
-<script>
-  import { onMount } from 'svelte';
+<script>  import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
-  import { Search, Filter, Clock, CheckCircle, Truck, Package, Download, Zap, Wrench, FileText, Upload } from 'lucide-svelte';
+  import { userStore } from '$lib/stores/user.js';
+  import { LogIn, UserPlus, Mail, Lock, User, Shield, Briefcase, CheckCircle, AlertCircle, LogOut } from 'lucide-svelte';
+  import { goto } from '$app/navigation';
   
-  let parts = [];
-  let filteredParts = [];
+  let user = null;
   let loading = true;
-  let searchTerm = '';
-  let filterWorkflow = '';
-  let filterStatus = '';
-  
-  const workflows = [
-    { value: 'laser-cut', label: 'Laser Cut', icon: Zap },
-    { value: 'router', label: 'Router', icon: Wrench },
-    { value: 'lathe', label: 'Lathe', icon: FileText },
-    { value: 'mill', label: 'Mill', icon: FileText },
-    { value: '3d-print', label: '3D Print', icon: Upload }
-  ];
-  
-  const statuses = [
-    { value: 'pending', label: 'Pending' },
-    { value: 'in-progress', label: 'In Progress' },
-    { value: 'cammed', label: 'Cammed' },
-    { value: 'complete', label: 'Complete' }
-  ];
-
+  let authMode = 'login'; // 'login' or 'register'  
+  let formData = {
+    email: '',
+    password: '',
+    name: ''
+  };
+  let authLoading = false;
+  let authError = '';
+  let authSuccess = '';
   onMount(async () => {
-    await loadParts();
+    // Check if user is already logged in
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      await loadUserProfile(session.user);
+    }
+    loading = false;
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        await loadUserProfile(session.user);
+      } else if (event === 'SIGNED_OUT') {
+        user = null;
+        userStore.set(null);
+      }
+    });
+
+    return () => subscription?.unsubscribe();
   });
 
-  // Fixed drag and drop handlers for better Vercel compatibility
-  function handleDragOver(event) {
-    event.preventDefault();
-    event.currentTarget.classList.add('active');
-  }
-
-  function handleDragLeave(event) {
-    event.preventDefault();
-    event.currentTarget.classList.remove('active');
-  }
-
-  async function loadParts() {
+  async function loadUserProfile(authUser) {
     try {
       const { data, error } = await supabase
-        .from('parts')
+        .from('user_profiles')
         .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      parts = data || [];
-    } catch (error) {
-      console.error('Error loading parts:', error);
-      alert('Error loading parts. Please try again.');
-    } finally {
-      loading = false;
-    }
-  }
+        .eq('id', authUser.id)
+        .single();
 
-  async function downloadFile(fileName, partId, currentStatus) {
-    try {
-      console.log('Attempting to download file:', fileName);
-      console.log('Part ID:', partId, 'Status:', currentStatus);
-      
-      // Try to create signed URL for the filename as stored
-      let { data, error } = await supabase.storage
-        .from('manufacturing-files')
-        .createSignedUrl(fileName, 60); // URL expires in 60 seconds
-      
-      // If that fails, it might be URL encoded, so try decoding it
-      if (error && error.message.includes('Object not found')) {
-        console.log('First attempt failed, trying decoded filename...');
-        const decodedFileName = decodeURIComponent(fileName);
-        console.log('Decoded filename:', decodedFileName);
-        const result = await supabase.storage
-          .from('manufacturing-files')
-          .createSignedUrl(decodedFileName, 60);
-        data = result.data;
-        error = result.error;
-      }
-      
-      if (error) throw error;
-      
-      console.log('Signed URL generated successfully:', data.signedUrl);
-      
-      // If part is still "pending", automatically mark it as "in-progress"
-      if (currentStatus === 'pending') {
-        await updatePartStatus(partId, 'in-progress');
-      }
-      
-      // Open the signed URL in a new tab
-      window.open(data.signedUrl, '_blank');
-    } catch (error) {
-      console.error('Error downloading file:', error);
-      alert(`Error downloading file: ${error.message}. The file may have been deleted or the filename may be incorrect.`);
-    }
-  }
-
-  async function uploadGcodeFile(partId, file) {
-    try {
-      // Upload G-code file to Supabase Storage
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}_gcode_${partId}.${fileExt}`;
-      
-      console.log('Uploading G-code file:', fileName);
-      
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('manufacturing-files')
-        .upload(fileName, file);
-      
-      if (uploadError) throw uploadError;
-      
-      console.log('G-code file uploaded successfully:', uploadData.path);
-      
-      // Get the public URL for the uploaded file
-      const { data: { publicUrl } } = supabase.storage
-        .from('manufacturing-files')
-        .getPublicUrl(fileName);
-      
-      // Update the part with G-code file info and change status to 'cammed'
-      const { error: updateError } = await supabase
-        .from('parts')
-        .update({ 
-          gcode_file_name: fileName,
-          gcode_file_url: publicUrl,
-          status: 'cammed',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', partId);
-      
-      if (updateError) throw updateError;
-      
-      await loadParts();
-      alert('G-code file uploaded successfully! Part status updated to Cammed.');
-    } catch (error) {
-      console.error('Error uploading G-code file:', error);
-      alert(`Error uploading G-code file: ${error.message}`);
-    }
-  }
-
-  function handleGcodeFileUpload(event, partId) {
-    const file = event.target.files[0];
-    if (file) {
-      uploadGcodeFile(partId, file);
-      event.target.value = ''; // Reset input
-    }
-  }
-
-  function handleGcodeDrop(event, partId) {
-    event.preventDefault();
-    event.currentTarget.classList.remove('active');
-      const files = event.dataTransfer.files;
-    if (files.length > 0) {
-      const file = files[0];
-      const fileExtension = file.name.split('.').pop().toLowerCase();
-      const allowedExtensions = ['gcode', 'nc', 'cnc', 'tap', 'ngc'];
-      
-      if (!allowedExtensions.includes(fileExtension)) {
-        alert('Please upload a G-code file (.gcode, .nc, .cnc, .tap, or .ngc)');
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error loading profile:', error);        // Use auth user data as fallback
+        user = {
+          id: authUser.id,
+          email: authUser.email,
+          full_name: authUser.user_metadata?.name || '',
+          role: authUser.user_metadata?.role || 'pending',
+          permissions: authUser.user_metadata?.permissions || 'none'
+        };
+        userStore.set(user);
         return;
-      }
-      
-      uploadGcodeFile(partId, file);
-    }
-  }
-
-  async function updatePartStatus(partId, newStatus) {
-    try {
-      const { error } = await supabase
-        .from('parts')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', partId);
-      
-      if (error) throw error;
-      await loadParts();
-    } catch (error) {
-      console.error('Error updating part status:', error);
-      alert('Error updating part status. Please try again.');
-    }
-  }
-
-  async function completePart(partId, deliveryMethod, kittingBin = '') {
-    try {
-      const updateData = {
-        status: 'complete',
-        delivered: deliveryMethod === 'delivered',
-        updated_at: new Date().toISOString()
+      }      const userProfile = {
+        id: authUser.id,
+        email: authUser.email,
+        full_name: data?.full_name || authUser.user_metadata?.name || '',
+        role: data?.role || authUser.user_metadata?.role || 'pending',
+        permissions: data?.permissions || authUser.user_metadata?.permissions || 'none',
+        created_at: data?.created_at || authUser.created_at
       };
-      
-      if (deliveryMethod === 'kitting-bin' && kittingBin) {
-        updateData.kitting_bin = kittingBin;
-      }
-      
-      const { error } = await supabase
-        .from('parts')
-        .update(updateData)
-        .eq('id', partId);
-      
-      if (error) throw error;
-      await loadParts();
+
+      user = userProfile;
+      userStore.set(userProfile);
     } catch (error) {
-      console.error('Error completing part:', error);
-      alert('Error completing part. Please try again.');
+      console.error('Error loading user profile:', error);
     }
   }
 
-  function getWorkflowLabel(workflow) {
-    const found = workflows.find(w => w.value === workflow);
-    return found ? found.label : workflow;
-  }
-
-  function getWorkflowIcon(workflow) {
-    const found = workflows.find(w => w.value === workflow);
-    return found ? found.icon : FileText;
-  }
-
-  function formatDate(dateString) {
-    return new Date(dateString).toLocaleDateString();
-  }
-
-  function getStatusDisplay(part) {
-    if (part.status === 'complete') {
-      if (part.kitting_bin) {
-        return part.kitting_bin;
-      } else if (part.delivered) {
-        return 'Delivered';
-      }
-      return 'Complete';
-    }
-    return part.status;
-  }
-
-  async function exportToCSV() {
+  async function handleAuth() {
+    authLoading = true;
+    authError = '';
+    authSuccess = '';
+    
     try {
-      // Fetch all parts data
-      const { data, error } = await supabase
-        .from('parts')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      
-      if (!data || data.length === 0) {
-        alert('No parts data to export.');
-        return;
+      if (authMode === 'login') {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: formData.email,
+          password: formData.password
+        });
+        
+        if (error) throw error;
+          // User will be redirected by the auth state change listener
+      } else {        // Register new user
+        const { data, error } = await supabase.auth.signUp({
+          email: formData.email,
+          password: formData.password,
+          options: {
+            data: {
+              name: formData.name
+            }
+          }
+        });
+        
+        if (error) throw error;
+        
+        if (data.user) {
+          // Create user profile with default values - roles will be assigned by admin
+          const { error: profileError } = await supabase
+            .from('user_profiles')
+            .insert({
+              id: data.user.id,
+              email: data.user.email,
+              full_name: formData.name,
+              role: 'pending', // Default role until assigned by admin
+              permissions: 'none' // Default permissions until assigned by admin
+            });
+
+          if (profileError) {
+            console.error('Error creating profile:', profileError);
+            // Don't throw error as the user account was created successfully
+          }
+        }
+        
+        if (data.user && !data.session) {
+          authSuccess = 'Registration successful! Please check your email to confirm your account.';
+        }
       }
-      
-      // Define CSV headers
-      const headers = [
-        'ID',
-        'Name',
-        'Requester',
-        'Project ID',
-        'Workflow',
-        'Quantity',
-        'Material',
-        'Status',
-        'File Name',
-        'Kitting Bin',
-        'Delivered',
-        'Created Date',
-        'Updated Date'
-      ];
-      
-      // Convert data to CSV format
-      const csvContent = [
-        headers.join(','), // Header row
-        ...data.map(part => [
-          part.id || '',
-          `"${(part.name || '').replace(/"/g, '""')}"`, // Escape quotes
-          `"${(part.requester || '').replace(/"/g, '""')}"`,
-          `"${(part.project_id || '').replace(/"/g, '""')}"`,
-          part.workflow || '',
-          part.quantity || 1,
-          `"${(part.material || '').replace(/"/g, '""')}"`,
-          part.status || '',
-          `"${(part.file_name || '').replace(/"/g, '""')}"`,
-          `"${(part.kitting_bin || '').replace(/"/g, '""')}"`,
-          part.delivered ? 'Yes' : 'No',
-          part.created_at ? new Date(part.created_at).toLocaleString() : '',
-          part.updated_at ? new Date(part.updated_at).toLocaleString() : ''
-        ].join(','))
-      ].join('\n');
-      
-      // Create and download the file
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      const url = URL.createObjectURL(blob);
-      
-      link.setAttribute('href', url);
-      link.setAttribute('download', `parts_export_${new Date().toISOString().split('T')[0]}.csv`);
-      link.style.visibility = 'hidden';
-      
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
     } catch (error) {
-      console.error('Error exporting CSV:', error);
-      alert('Error exporting data. Please try again.');
+      authError = error.message;
+    } finally {
+      authLoading = false;
     }
+  }  function resetForm() {
+    formData = {
+      email: '',
+      password: '',
+      name: ''
+    };
+    authError = '';
+    authSuccess = '';
+  }
+  function switchMode() {
+    authMode = authMode === 'login' ? 'register' : 'login';
+    resetForm();
   }
 
-  // Reactive statement that filters parts when search term, filters, or parts array changes
-  $: filteredParts = parts.filter(part => {
-    const matchesSearch = !searchTerm || 
-      part.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      part.requester.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      part.project_id.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesWorkflow = !filterWorkflow || part.workflow === filterWorkflow;
-    const matchesStatus = !filterStatus || part.status === filterStatus;
-    
-    return matchesSearch && matchesWorkflow && matchesStatus;
-  });
+  async function handleLogout() {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('Error logging out:', error);
+    }
+  }
 </script>
 
 <svelte:head>
-  <title>Parts List - Manufacturing Management</title>
+  <title>971 Hub - Login</title>
 </svelte:head>
 
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-  <h1>Parts List</h1>
-  <div style="display: flex; gap: 10px;">
-    <a href="/create" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
-      <Upload size={16} />
-      Create New Part
-    </a>
-    <button
-      class="btn btn-secondary"
-      on:click={exportToCSV}
-      style="display: flex; align-items: center; gap: 8px;"
-    >
-      <Download size={16} />
-      Export CSV
-    </button>
-  </div>
-</div>
-
-<div class="card">
-  <div class="filters">
-    <div class="form-group">
-      <label class="form-label">
-        <Search size={16} />
-        Search
-      </label>
-      <input
-        type="text"
-        class="form-input"
-        placeholder="Search by name, requester, or project ID..."
-        bind:value={searchTerm}
-      />
-    </div>
-    
-    <div class="form-group">
-      <label class="form-label">
-        <Filter size={16} />
-        Workflow
-      </label>
-      <select class="form-select" bind:value={filterWorkflow}>
-        <option value="">All Workflows</option>
-        {#each workflows as workflow}
-          <option value={workflow.value}>{workflow.label}</option>
-        {/each}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label class="form-label">
-        <Filter size={16} />
-        Status
-      </label>
-      <select class="form-select" bind:value={filterStatus}>
-        <option value="">All Statuses</option>
-        {#each statuses as status}
-          <option value={status.value}>{status.label}</option>
-        {/each}
-      </select>
-    </div>
-  </div>
-</div>
-
 {#if loading}
-  <div class="card">
-    <p>Loading parts...</p>
+  <div class="loading-container">
+    <div class="loading-spinner"></div>
+    <p>Loading...</p>
   </div>
-{:else if filteredParts.length === 0}
-  <div class="card">
-    <p>No parts found. {parts.length === 0 ? 'Create your first part!' : 'Try adjusting your filters.'}</p>
-  </div>
-{:else}
-  <div class="parts-grid">
-    {#each filteredParts as part (part.id)}
-      <div class="card part-card">
-        <div class="part-header">
-          <div class="part-info">
-            <h3>{part.name}</h3>
-            <div class="workflow-badge">
-              <svelte:component this={getWorkflowIcon(part.workflow)} size={16} />
-              {getWorkflowLabel(part.workflow)}
-            </div>
-          </div>
-          <div class="status-badge status-{part.status}">
-            {getStatusDisplay(part)}
+{:else if user}
+  <!-- User Dashboard -->
+  <div class="dashboard-container">    <div class="dashboard-header">
+      <div class="brand">
+        <Briefcase size={32} />
+        <h1>971 Hub</h1>
+      </div>
+      <button class="btn btn-secondary" on:click={handleLogout}>
+        <LogOut size={16} />
+        Sign Out
+      </button>
+    </div>
+
+    <div class="user-welcome">
+      <h2>Welcome back, {user.full_name || user.email}!</h2>
+      <div class="user-info">
+        <div class="info-card">
+          <User size={20} />
+          <div>
+            <strong>Name:</strong> {user.full_name || 'Not set'}
           </div>
         </div>
-        
-        <div class="part-details">
-          <p><strong>Requester:</strong> {part.requester}</p>
-          <p><strong>Project ID:</strong> {part.project_id}</p>
-          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>
-          {#if part.material}
-            <p><strong>Material:</strong> {part.material}</p>
-          {/if}
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>
-          {#if part.file_name}
-            <p><strong>File:</strong> 
-              <button 
-                class="file-link" 
-                on:click={() => downloadFile(part.file_name, part.id, part.status)}
-                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
-              >
-                Download {part.file_name}
-              </button>
-            </p>
-          {/if}
-          {#if part.gcode_file_name}
-            <p><strong>G-code File:</strong> 
-              <a 
-                href={part.gcode_file_url}
-                target="_blank"
-                class="file-link"
-              >
-                Download {part.gcode_file_name}
-              </a>
-            </p>
-          {/if}
-          {#if part.kitting_bin}
-            <p><strong>Kitting Bin:</strong> {part.kitting_bin}</p>
-          {/if}
-          {#if part.delivered}
-            <p><strong>Status:</strong> Delivered</p>
-          {/if}
-        </div>
-        
-        {#if part.status === 'pending' || part.status === 'in-progress' || (part.status === 'cammed' && part.workflow === 'router')}
-          <div class="part-actions">
-            {#if part.status === 'pending'}
-              <button
-                class="btn btn-secondary"
-                on:click={() => updatePartStatus(part.id, 'in-progress')}
-              >
-                <Clock size={16} />
-                Start Work
-              </button>
-            {:else if part.status === 'in-progress'}
-              {#if part.workflow === 'router'}
-                <div class="router-cam-section">
-                  <p><strong>Step 1:</strong> Download STEP file above</p>
-                  <p><strong>Step 2:</strong> Upload G-code file after CAM processing</p>
-                    <div class="gcode-upload">
-                    <label class="form-label" for="gcode-upload-{part.id}">Upload G-code File:</label>
-                    <div class="file-upload-area" 
-                         on:click={() => document.getElementById(`gcode-upload-${part.id}`).click()}
-                         on:dragover={handleDragOver}
-                         on:dragleave={handleDragLeave}
-                         on:drop={(e) => handleGcodeDrop(e, part.id)}
-                         role="button"
-                         tabindex="0"
-                         on:keydown={(e) => {
-                           if (e.key === 'Enter' || e.key === ' ') {
-                             document.getElementById(`gcode-upload-${part.id}`).click();
-                           }
-                         }}>
-                      <input
-                        id="gcode-upload-{part.id}"
-                        type="file"
-                        accept=".gcode,.nc,.cnc,.tap"
-                        class="file-input-hidden"
-                        on:change={(e) => handleGcodeFileUpload(e, part.id)}
-                      />
-                      <Upload size={32} />
-                      <span class="upload-text">Drop your G-code file here or click to browse</span>
-                      <span class="file-info">Only G-code files are accepted (.gcode, .nc, .cnc, .tap)</span>
-                    </div>
-                  </div>
-                </div>
-              {:else}
-                <div class="complete-actions">
-                  <button
-                    class="btn"
-                    on:click={() => completePart(part.id, 'delivered')}
-                  >
-                    <Truck size={16} />
-                    Mark Delivered
-                  </button>
-                  <div class="kitting-action">
-                    <input
-                      type="text"
-                      placeholder="Kitting Bin ID"
-                      class="form-input kitting-input"
-                      on:keydown={(e) => {
-                        if (e.key === 'Enter' && e.target.value.trim()) {
-                          completePart(part.id, 'kitting-bin', e.target.value.trim());
-                        }
-                      }}
-                    />
-                    <button
-                      class="btn btn-secondary"
-                      on:click={(e) => {
-                        const input = e.target.previousElementSibling;
-                        if (input.value.trim()) {
-                          completePart(part.id, 'kitting-bin', input.value.trim());
-                        }
-                      }}
-                    >
-                      <Package size={16} />
-                      To Bin
-                    </button>
-                  </div>
-                </div>
-              {/if}
-            {:else if part.status === 'cammed' && part.workflow === 'router'}
-              <div class="complete-actions">
-                <button
-                  class="btn"
-                  on:click={() => completePart(part.id, 'delivered')}
-                >
-                  <Truck size={16} />
-                  Mark Delivered
-                </button>
-                <div class="kitting-action">
-                  <input
-                    type="text"
-                    placeholder="Kitting Bin ID"
-                    class="form-input kitting-input"
-                    on:keydown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        completePart(part.id, 'kitting-bin', e.target.value.trim());
-                      }
-                    }}
-                  />
-                  <button
-                    class="btn btn-secondary"
-                    on:click={(e) => {
-                      const input = e.target.previousElementSibling;
-                      if (input.value.trim()) {
-                        completePart(part.id, 'kitting-bin', input.value.trim());
-                      }
-                    }}
-                  >
-                    <Package size={16} />
-                    To Bin
-                  </button>
-                </div>
-              </div>
+        <div class="info-card">
+          <Mail size={20} />
+          <div>
+            <strong>Email:</strong> {user.email}
+          </div>
+        </div>        <div class="info-card">
+          <Shield size={20} />
+          <div>
+            <strong>Role:</strong> 
+            {#if user.role === 'pending'}
+              <span class="pending-status">Pending Assignment</span>
+            {:else}
+              {user.role || 'Not assigned'}
             {/if}
           </div>
-        {/if}
+        </div>
+        <div class="info-card">
+          <Shield size={20} />
+          <div>
+            <strong>Permissions:</strong> 
+            {#if user.permissions === 'none' || user.role === 'pending'}
+              <span class="pending-status">Awaiting Admin Approval</span>
+            {:else}
+              {user.permissions || 'Not assigned'}
+            {/if}
+          </div>
+        </div>
+      </div>    </div>
+
+    {#if user.role === 'pending' || user.permissions === 'none'}
+      <div class="pending-notice">
+        <AlertCircle size={20} />
+        <div>
+          <h3>Account Pending Approval</h3>
+          <p>Your account has been created successfully. An administrator needs to assign your role and permissions before you can access the manufacturing features. You'll receive an email notification once your account is approved.</p>
+        </div>
       </div>
-    {/each}
+    {:else}
+      <div class="dashboard-actions">
+        <h3>Quick Actions</h3>
+        <div class="action-grid">
+          <a href="/manufacture" class="action-card">
+            <Briefcase size={24} />
+            <h4>Manufacturing</h4>
+            <p>Access manufacturing workflows and tasks</p>
+          </a>
+          <a href="/cad" class="action-card">
+            <User size={24} />
+            <h4>CAD Design</h4>
+            <p>Work with CAD files and designs</p>
+          </a>
+        </div>
+      </div>
+    {/if}
+  </div>
+{:else}
+  <!-- Authentication Forms -->
+  <div class="auth-container">
+    <div class="auth-card">      <div class="auth-header">
+        <div class="brand">
+          <Briefcase size={32} />
+          <h1>971 Hub</h1>
+        </div>
+        <p class="subtitle">Centralized Platform for Workflow Management</p>
+      </div>
+
+      <div class="auth-form">
+        <div class="form-tabs">
+          <button 
+            class="tab-btn {authMode === 'login' ? 'active' : ''}"
+            on:click={() => { authMode = 'login'; resetForm(); }}
+          >
+            <LogIn size={16} />
+            Sign In
+          </button>
+          <button 
+            class="tab-btn {authMode === 'register' ? 'active' : ''}"
+            on:click={() => { authMode = 'register'; resetForm(); }}
+          >
+            <UserPlus size={16} />
+            Register
+          </button>
+        </div>
+
+        <form on:submit|preventDefault={handleAuth}>
+          {#if authMode === 'register'}
+            <div class="form-group">
+              <label class="form-label" for="name">
+                <User size={18} />
+                Full Name
+              </label>
+              <input
+                id="name"
+                type="text"
+                class="form-input"
+                bind:value={formData.name}
+                placeholder="Enter your full name"
+                required              />
+            </div>
+          {/if}
+
+          <div class="form-group">
+            <label class="form-label" for="email">
+              <Mail size={18} />
+              Email Address
+            </label>
+            <input
+              id="email"
+              type="email"
+              class="form-input"
+              bind:value={formData.email}
+              placeholder="Enter your email"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="password">
+              <Lock size={18} />
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              class="form-input"
+              bind:value={formData.password}
+              placeholder="Enter your password"
+              required
+              minlength="6"
+            />
+            {#if authMode === 'register'}
+              <small class="form-help">Password must be at least 6 characters long</small>
+            {/if}
+          </div>
+
+          {#if authError}
+            <div class="alert alert-error">
+              <AlertCircle size={18} />
+              {authError}
+            </div>
+          {/if}
+
+          {#if authSuccess}
+            <div class="alert alert-success">
+              <CheckCircle size={18} />
+              {authSuccess}
+            </div>
+          {/if}
+
+          <button 
+            type="submit" 
+            class="btn btn-primary auth-submit"
+            disabled={authLoading}
+          >
+            {#if authLoading}
+              <div class="loading-spinner small"></div>
+            {:else if authMode === 'login'}
+              <LogIn size={18} />
+            {:else}
+              <UserPlus size={18} />
+            {/if}
+            {authMode === 'login' ? 'Sign In' : 'Create Account'}
+          </button>
+        </form>
+
+        <div class="auth-footer">
+          <p>
+            {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}
+            <button class="link-btn" on:click={switchMode}>
+              {authMode === 'login' ? 'Register here' : 'Sign in here'}
+            </button>
+          </p>        </div>
+      </div>
+    </div>
   </div>
 {/if}
 
 <style>
-  .filters {
-    display: grid;
-    grid-template-columns: 2fr 1fr 1fr;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-  
-  .parts-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-    gap: 1rem;
-  }
-  
-  .part-card {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-  }
-  
-  .part-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-  }
-  
-  .part-info h3 {
-    margin: 0 0 0.5rem 0;
-    color: var(--secondary);
-  }
-  
-  .workflow-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: var(--background);
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    border: 1px solid var(--border);
-  }
-  
-  .part-details {
-    margin-bottom: 1rem;
-  }
-  
-  .part-details p {
-    margin: 0.25rem 0;
-    font-size: 0.9rem;
-  }
-  
-  .file-link {
-    color: var(--accent);
-    text-decoration: none;
-    font-weight: 500;
-  }
-  
-  .file-link:hover {
-    text-decoration: underline;
-  }
-  
-  .part-actions {
-    border-top: 1px solid var(--border);
-    padding-top: 1rem;
-  }
-  
-  .complete-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .kitting-action {
-    display: flex;
-    gap: 0.5rem;
-  }
-  
-  .kitting-input {
-    flex: 1;
-    margin: 0;
-  }
-  
-  .router-cam-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .router-cam-section p {
-    margin: 0;
-    font-size: 0.9rem;
-    color: var(--text);
-  }
-  
-  .gcode-upload {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  
-  .file-upload-area {
+  .loading-container {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    min-height: 50vh;
+    gap: 1rem;
+  }
+
+  .loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid var(--border);
+    border-top: 4px solid var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  .loading-spinner.small {
+    width: 20px;
+    height: 20px;
+    border-width: 2px;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  .auth-container {
+    max-width: 500px;
+    margin: 4rem auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 60vh;
+  }
+
+  .auth-card {
+    background: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     padding: 2rem;
-    border: 2px dashed var(--border);
-    border-radius: 4px;
-    background: var(--background);
-    cursor: pointer;
-    transition: all 0.2s;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  }
+
+  .auth-header {
     text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 0.75rem;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
   }
-  
-  .file-upload-area:hover,
-  .file-upload-area.active {
-    border-color: var(--accent);
-    background: rgba(241, 195, 49, 0.1);
-  }
-  
-  .file-input-hidden {
-    display: none;
-  }
-  
-  .upload-text {
-    font-size: 1rem;
-    font-weight: 500;
+
+  .brand h1 {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 700;
     color: var(--secondary);
   }
-  
-  .file-info {
-    font-size: 0.8rem;
+
+  .subtitle {
     color: #666;
+    margin: 0;
+    font-size: 0.95rem;
+  }
+
+  .form-tabs {
+    display: flex;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab-btn {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: none;
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .tab-btn:hover {
+    color: var(--secondary);
+  }
+
+  .form-group {
+    margin-bottom: 1.25rem;
+  }
+
+  .form-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: var(--secondary);
+  }
+
+  .form-help {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.85rem;
+    color: #666;
+  }
+
+  .alert {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+  }
+
+  .alert-error {
+    background: rgba(220, 53, 69, 0.1);
+    color: var(--danger);
+    border: 1px solid rgba(220, 53, 69, 0.2);
+  }
+
+  .alert-success {
+    background: rgba(40, 167, 69, 0.1);
+    color: var(--success);
+    border: 1px solid rgba(40, 167, 69, 0.2);
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: var(--secondary);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #d4a829;
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .auth-submit {
+    width: 100%;
+    padding: 0.875rem;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+
+  .auth-footer {
+    text-align: center;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .auth-footer p {
+    margin: 0;
+    color: #666;
+    font-size: 0.9rem;
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: inherit;
+    padding: 0;
+    margin-left: 0.25rem;
+  }
+
+  .link-btn:hover {    color: #d4a829;
+  }
+
+  @media (max-width: 768px) {
+    .auth-container {
+      margin: 2rem 1rem;
+    }    .auth-card {
+      padding: 1.5rem;
+    }
+
+    .brand h1 {
+      font-size: 1.5rem;
+    }
+  }
+
+  /* Dashboard Styles */
+  .dashboard-container {
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+  }
+
+  .dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .user-welcome {
+    background: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .user-welcome h2 {
+    margin: 0 0 1.5rem 0;
+    color: var(--secondary);
+    font-size: 1.5rem;
+  }
+
+  .user-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+  }
+
+  .info-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .info-card div {
+    font-size: 0.9rem;
+  }
+
+  .pending-status {
+    color: #f59e0b;
+    font-weight: 500;
     font-style: italic;
   }
-  
+
+  .pending-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    color: #92400e;
+  }
+
+  .pending-notice h3 {
+    margin: 0 0 0.5rem 0;
+    color: #92400e;
+    font-size: 1.1rem;
+  }
+
+  .pending-notice p {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .dashboard-actions {
+    margin-top: 2rem;
+  }
+
+  .dashboard-actions h3 {
+    margin: 0 0 1rem 0;
+    color: var(--secondary);
+    font-size: 1.25rem;
+  }
+
+  .action-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .action-card {
+    display: block;
+    background: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+
+  .action-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: var(--accent);
+  }
+
+  .action-card h4 {
+    margin: 0.5rem 0;
+    color: var(--secondary);
+    font-size: 1.1rem;
+  }
+
+  .action-card p {
+    margin: 0;
+    color: #666;
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+
   @media (max-width: 768px) {
-    .filters {
-      grid-template-columns: 1fr;
+    .dashboard-container {
+      margin: 1rem;
+      padding: 0;
     }
-    
-    .parts-grid {
-      grid-template-columns: 1fr;
-    }
-    
-    .kitting-action {
+
+    .dashboard-header {
       flex-direction: column;
+      gap: 1rem;
+      align-items: stretch;
+    }
+
+    .user-welcome {
+      padding: 1.5rem;
+    }
+
+    .user-info {
+      grid-template-columns: 1fr;
+    }
+
+    .action-grid {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+
+    .action-card {
+      padding: 1rem;
     }
   }
 </style>
