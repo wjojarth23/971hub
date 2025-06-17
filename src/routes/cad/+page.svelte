@@ -22,7 +22,6 @@
   let stockTypes = [];
   let buildBOM = [];
   let loadingBuild = false;
-
   onMount(async () => {
     // Check authentication
     const { data: { session } } = await supabase.auth.getSession();
@@ -31,22 +30,47 @@
       return;
     }
 
+    // Ensure user profile exists
+    await ensureUserProfile(session.user);
+
     // Get user profile
     userStore.subscribe(value => {
       user = value;
-      loading = false;    });
+      loading = false;
+    });
 
     await loadSubsystems();
     await loadBuilds();
     await loadStockTypes();
-  });  async function loadSubsystems() {
+  });
+
+  async function ensureUserProfile(authUser) {
+    try {
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .upsert({
+          id: authUser.id,
+          display_name: authUser.user_metadata?.display_name || authUser.user_metadata?.full_name || authUser.email.split('@')[0],
+          full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.display_name || '',
+          email: authUser.email,
+          role: authUser.user_metadata?.role || 'member',
+          permissions: authUser.user_metadata?.permissions || 'basic'
+        }, {
+          onConflict: 'id'
+        });
+
+      if (error) console.error('Error ensuring user profile:', error);
+    } catch (error) {
+      console.error('Error ensuring user profile:', error);
+    }
+  }async function loadSubsystems() {
     try {
       const { data, error } = await supabase
         .from('subsystems')
         .select(`
           *,
           subsystem_members(user_id),
-          lead_user:auth.users!lead_user_id(email, raw_user_meta_data)
+          lead_user:user_profiles!lead_user_id(display_name, email)
         `);
 
       if (error) throw error;
@@ -535,7 +559,7 @@
             </div>            {#if subsystem.lead_user}
               <div class="info-item">
                 <span class="lead-label">Lead:</span>
-                <span>{subsystem.lead_user.raw_user_meta_data?.name || subsystem.lead_user.email}</span>
+                <span>{subsystem.lead_user?.display_name || subsystem.lead_user?.email || 'Unknown'}</span>
               </div>
             {/if}
           </div>          {#if subsystem.onshape_url}

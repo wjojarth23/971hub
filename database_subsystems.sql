@@ -1,3 +1,42 @@
+-- Function to handle user profile creation/update on auth
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+    INSERT INTO public.user_profiles (id, display_name, full_name, email, role, permissions)
+    VALUES (
+        new.id,
+        COALESCE(new.raw_user_meta_data->>'display_name', new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
+        COALESCE(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'display_name', ''),
+        new.email,
+        COALESCE(new.raw_user_meta_data->>'role', 'member'),
+        COALESCE(new.raw_user_meta_data->>'permissions', 'basic')
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = new.email,
+        role = COALESCE(new.raw_user_meta_data->>'role', user_profiles.role),
+        permissions = COALESCE(new.raw_user_meta_data->>'permissions', user_profiles.permissions),
+        updated_at = NOW();
+    RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger to automatically create/update user profile
+CREATE OR REPLACE TRIGGER on_auth_user_created
+    AFTER INSERT OR UPDATE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- User profiles table (stores displayable user info since auth.users is not directly accessible)
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id UUID REFERENCES auth.users(id) PRIMARY KEY,
+    display_name VARCHAR(255),
+    full_name VARCHAR(255),
+    email VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'member',
+    permissions VARCHAR(50) DEFAULT 'basic',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Subsystems table
 CREATE TABLE IF NOT EXISTS subsystems (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -156,6 +195,16 @@ ALTER TABLE build_bom ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_materials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE manufacturing_workflows ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for user_profiles
+CREATE POLICY "Users can view all profiles" ON user_profiles
+    FOR SELECT USING (true);
+
+CREATE POLICY "Users can create their own profile" ON user_profiles
+    FOR INSERT WITH CHECK (auth.uid() = id);
+
+CREATE POLICY "Users can update their own profile" ON user_profiles
+    FOR UPDATE USING (auth.uid() = id);
 
 -- RLS Policies for subsystems
 CREATE POLICY "Users can view all subsystems" ON subsystems

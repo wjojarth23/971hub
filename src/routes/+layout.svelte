@@ -27,9 +27,22 @@
 
     return () => subscription?.unsubscribe();
   });
-
   async function loadUserProfile(authUser) {
     try {
+      // First, ensure user profile exists
+      await supabase
+        .from('user_profiles')
+        .upsert({
+          id: authUser.id,
+          display_name: authUser.user_metadata?.display_name || authUser.user_metadata?.full_name || authUser.email.split('@')[0],
+          full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.display_name || '',
+          email: authUser.email,
+          role: authUser.user_metadata?.role || 'member',
+          permissions: authUser.user_metadata?.permissions || 'basic'
+        }, {
+          onConflict: 'id'
+        });
+
       const { data, error } = await supabase
         .from('user_profiles')
         .select('*')
@@ -63,6 +76,15 @@
       userStore.set(userProfile);
     } catch (error) {
       console.error('Error loading user profile:', error);
+      // Fallback to basic user info
+      user = {
+        id: authUser.id,
+        email: authUser.email,
+        full_name: authUser.user_metadata?.name || '',
+        role: 'member',
+        permissions: 'basic'
+      };
+      userStore.set(user);
     }
   }
 
