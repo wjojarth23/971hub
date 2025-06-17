@@ -14,11 +14,10 @@ class OnShapeAPI {
             'Authorization': `Basic ${credentials}`,
             'Content-Type': 'application/json'
         };
-    }
-
-    // Parse OnShape URL to extract document info
+    }    // Parse OnShape URL to extract document info
     parseOnShapeUrl(url) {
-        const regex = /https:\/\/cad\.onshape\.com\/documents\/([a-f0-9]{24})\/w\/([a-f0-9]{24})\/e\/([a-f0-9]{24})/;
+        // Support both standard and enterprise OnShape URLs
+        const regex = /https:\/\/[^\/]+\.onshape\.com\/documents\/([a-f0-9]{24})\/w\/([a-f0-9]{24})\/e\/([a-f0-9]{24})/;
         const match = url.match(regex);
         
         if (match) {
@@ -29,7 +28,7 @@ class OnShapeAPI {
             };
         }
         return null;
-    }    // Get document information
+    }// Get document information
     async getDocumentInfo(documentId) {
         try {
             const path = `/api/documents/${documentId}`;
