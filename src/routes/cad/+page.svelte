@@ -46,11 +46,9 @@
 
   async function ensureUserProfile(authUser) {
     try {
-      const { data, error } = await supabase
-        .from('user_profiles')
+      const { data, error } = await supabase        .from('user_profiles')
         .upsert({
           id: authUser.id,
-          display_name: authUser.user_metadata?.display_name || authUser.user_metadata?.full_name || authUser.email.split('@')[0],
           full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.display_name || '',
           email: authUser.email,
           role: authUser.user_metadata?.role || 'member',
@@ -65,17 +63,48 @@
     }
   }async function loadSubsystems() {
     try {
+      // First, fetch subsystems with member info
       const { data, error } = await supabase
         .from('subsystems')
         .select(`
           *,
-          subsystem_members(user_id),
-          lead_user:user_profiles!lead_user_id(display_name, email)
+          subsystem_members(user_id)
         `);
 
       if (error) throw error;
       subsystems = data || [];
-        // Load OnShape data for subsystems with linked documents
+
+      // Get unique lead user IDs
+      const leadUserIds = [...new Set(subsystems
+        .map(s => s.lead_user_id)
+        .filter(id => id)
+      )];
+
+      // Fetch user profiles for all leads
+      let userProfiles = {};
+      if (leadUserIds.length > 0) {
+        const { data: profiles, error: profileError } = await supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .in('id', leadUserIds);
+
+        if (profileError) {
+          console.error('Error loading user profiles:', profileError);
+        } else {
+          // Create a lookup map
+          profiles.forEach(profile => {
+            userProfiles[profile.id] = profile;
+          });
+        }
+      }
+
+      // Add lead user info to subsystems
+      subsystems = subsystems.map(subsystem => ({
+        ...subsystem,
+        lead_user: subsystem.lead_user_id ? userProfiles[subsystem.lead_user_id] || null : null
+      }));
+
+      // Load OnShape data for subsystems with linked documents
       for (const subsystem of subsystems) {
         if (subsystem.onshape_document_id && onShapeAPI.accessKey && onShapeAPI.secretKey) {
           try {
@@ -557,9 +586,8 @@
               <Users size={16} />
               <span>{subsystem.subsystem_members.length} member{subsystem.subsystem_members.length !== 1 ? 's' : ''}</span>
             </div>            {#if subsystem.lead_user}
-              <div class="info-item">
-                <span class="lead-label">Lead:</span>
-                <span>{subsystem.lead_user?.display_name || subsystem.lead_user?.email || 'Unknown'}</span>
+              <div class="info-item">                <span class="lead-label">Lead:</span>
+                <span>{subsystem.lead_user?.full_name?.split(' ')[0] || subsystem.lead_user?.email || 'Unknown'}</span>
               </div>
             {/if}
           </div>          {#if subsystem.onshape_url}

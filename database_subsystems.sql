@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS subsystems (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    lead_user_id UUID REFERENCES auth.users(id),
+    lead_user_id UUID REFERENCES user_profiles(id),
     onshape_url TEXT,
     onshape_document_id VARCHAR(255),
     onshape_workspace_id VARCHAR(255),
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS subsystems (
 CREATE TABLE IF NOT EXISTS subsystem_members (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     subsystem_id UUID REFERENCES subsystems(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
     joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(subsystem_id, user_id)
 );
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS subsystem_files (
     file_path TEXT NOT NULL,
     file_type VARCHAR(100),
     file_size INTEGER,
-    uploaded_by UUID REFERENCES auth.users(id),
+    uploaded_by UUID REFERENCES user_profiles(id),
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -80,10 +80,10 @@ CREATE TABLE IF NOT EXISTS builds (
     release_name VARCHAR(255) NOT NULL,
     build_hash VARCHAR(64) UNIQUE NOT NULL, -- Unique hash for this build
     status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'ready_to_assemble', 'assembled')),
-    created_by UUID REFERENCES auth.users(id),
+    created_by UUID REFERENCES user_profiles(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     assembled_at TIMESTAMP WITH TIME ZONE,
-    assembled_by UUID REFERENCES auth.users(id)
+    assembled_by UUID REFERENCES user_profiles(id)
 );
 
 -- Build BOM (Bill of Materials) table
