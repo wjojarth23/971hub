@@ -41,17 +41,29 @@ export async function GET({ url }) {
                     return json({ error: 'Missing workspaceId or elementId for assembly info request' }, { status: 400 });
                 }
                 apiPath = `/api/v11/assemblies/d/${documentId}/w/${workspaceId}/e/${elementId}`;
-                break;
-            case 'assembly-bom':
+                break;            case 'assembly-bom':
                 if (!workspaceId || !elementId) {
                     return json({ error: 'Missing workspaceId or elementId for BOM request' }, { status: 400 });
                 }
                 const wvm = url.searchParams.get('wvm') || 'w';
                 const wvmid = url.searchParams.get('wvmid') || workspaceId;
-                apiPath = `/api/v11/assemblies/d/${documentId}/${wvm}/${wvmid}/e/${elementId}/bom`;
+                const indented = url.searchParams.get('indented') || 'false';
+                apiPath = `/api/v11/assemblies/d/${documentId}/${wvm}/${wvmid}/e/${elementId}/bom?indented=${indented}`;
+                break;
+            case 'part-bounding-box':
+                if (!elementId) {
+                    return json({ error: 'Missing elementId for bounding box request' }, { status: 400 });
+                }
+                const partWvm = url.searchParams.get('wvm') || 'w';
+                const partWvmId = url.searchParams.get('wvmId') || workspaceId;
+                const partId = url.searchParams.get('partId');
+                if (!partId) {
+                    return json({ error: 'Missing partId for bounding box request' }, { status: 400 });
+                }
+                apiPath = `/api/v11/parts/d/${documentId}/${partWvm}/${partWvmId}/e/${elementId}/partid/${partId}/boundingboxes`;
                 break;
             default:
-                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom' }, { status: 400 });
+                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box' }, { status: 400 });
         }const response = await fetch(`${ONSHAPE_BASE_URL}${apiPath}`, {
             method: 'GET',
             headers: getAuthHeaders()

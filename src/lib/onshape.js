@@ -100,16 +100,15 @@ class OnShapeAPI {
             console.error('Error fetching version details:', error);
             throw error;
         }
-    }
-
-    // Get assembly BOM for a specific version
+    }    // Get assembly BOM for a specific version
     async getAssemblyBOM(documentId, workspaceId, elementId, versionId = null) {
         try {
             const params = new URLSearchParams({
                 action: 'assembly-bom',
                 documentId,
                 workspaceId,
-                elementId
+                elementId,
+                indented: 'false'  // Return flattened BOM with all rows collapsed
             });
 
             // If versionId is provided, use version mode, otherwise use workspace mode
@@ -131,13 +130,41 @@ class OnShapeAPI {
             console.error('Error fetching assembly BOM:', error);
             throw error;
         }
+    }    // Get part bounding box
+    async getPartBoundingBox(documentId, wvm, wvmId, elementId, partId) {
+        try {            const params = new URLSearchParams({
+                action: 'part-bounding-box',
+                documentId,
+                wvm,
+                wvmId,
+                elementId,
+                partId
+            });
+            
+            console.log('Bounding box request params:', {
+                documentId, wvm, wvmId, elementId, partId
+            });
+            
+            const response = await fetch(`${this.apiRoute}?${params}`);
+              if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`Bounding box API error ${response.status}:`, errorText);
+                console.error('Request URL:', `${this.apiRoute}?${params}`);
+                throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching part bounding box:', error);
+            throw error;
+        }
     }
 
     // Placeholder for part properties (not available in current API endpoint structure)
     async getPartProperties(documentId, workspaceId, elementId, partId) {
         console.warn('Part properties endpoint not available in current OnShape API structure. Using empty object.');
         return {};
-    }    // Analyze BOM and categorize parts
+    }// Analyze BOM and categorize parts
     async analyzeBOM(bom) {
         const analyzedParts = [];
         

@@ -140,51 +140,213 @@
       isMember
     });
     return isMember;
-  }
-
-  async function analyzeBOM(bom) {
+  }  async function analyzeBOM(bom) {
     const analyzedParts = [];
     
     console.log('Analyzing BOM structure:', bom);
     
-    // The BOM structure has rows array, not bomTable.items
+    // Create a mapping from property names to header IDs for flexible lookup
+    const propertyToHeaderId = {};
+    bom.headers?.forEach(header => {
+      const propName = header.propertyName || header.name?.toLowerCase();
+      if (propName) {
+        propertyToHeaderId[propName] = header.id;
+      }
+    });
+    
+    console.log('Property to Header ID mapping:', propertyToHeaderId);
+    
+    // Helper function to get value from row by property name
+    function getValue(row, propertyName) {
+      const headerId = propertyToHeaderId[propertyName];
+      return headerId ? row.headerIdToValue?.[headerId] : null;
+    }
+    
+    // Process each row in the BOM
     for (const row of bom.rows || []) {
       let partType = 'manufactured';
       let material = '';
       let workflow = '';
       
-      // Extract part data from the row
-      const partName = row.item || row.name || 'Unknown Part';
-      const partNumber = row.partNumber || '';
-      const quantity = row.quantity || 1;
-      const description = row.description || '';
+      // Extract data using property names (fallback to hardcoded IDs for known structure)
+      const headerValues = row.headerIdToValue || {};
       
-      // Simple heuristics for part categorization
+      // Try to get values using property names first, then fallback to known IDs
+      const partName = getValue(row, 'name') || 
+                      headerValues['57f3fb8efa3416c06701d60d'] || 
+                      'Unknown Part';
+      
+      const partNumber = getValue(row, 'partNumber') || 
+                        headerValues['57f3fb8efa3416c06701d60f'] || 
+                        '';
+      
+      const quantity = getValue(row, 'quantity') || 
+                      headerValues['5ace84d3c046ad611c65a0dd'] || 
+                      1;
+      
+      const description = getValue(row, 'description') || 
+                         headerValues['57f3fb8efa3416c06701d60e'] || 
+                         '';
+        const materialData = getValue(row, 'material') || 
+                          headerValues['57f3fb8efa3416c06701d615'] || 
+                          '';
+      
+      const vendor = getValue(row, 'vendor') || 
+                    headerValues['57f3fb8efa3416c06701d612'] || 
+                    '';
+      
+      console.log('Extracted data for row:', {
+        partName,
+        partNumber,
+        quantity,
+        description,
+        materialData,
+        vendor,
+        isStandardContent: row.itemSource?.isStandardContent
+      });
+      
+      // Extract material information
+      if (materialData && typeof materialData === 'object') {
+        material = materialData.displayName || materialData.name || '';
+      } else if (typeof materialData === 'string') {
+        material = materialData;
+      }
+      
+      // Enhanced part categorization logic
       const partNameLower = partName.toLowerCase();
       const descriptionLower = description.toLowerCase();
       
-      if (partNameLower.includes('screw') || partNameLower.includes('bolt') || 
+      // Rule 1: If vendor is specified, it's COTS (overrides everything)
+      if (vendor && vendor.trim() !== '') {
+        partType = 'COTS';
+      }
+      // Rule 2: If part name contains "wcp", it's COTS
+      else if (partNameLower.includes('wcp')) {
+        partType = 'COTS';
+      }
+      // Rule 3: If part number starts with capital P, it's manufactured
+      else if (partNumber && partNumber.match(/^P/)) {
+        partType = 'manufactured';
+      }
+      // Rule 4: Standard OnShape content is COTS
+      else if (row.itemSource?.isStandardContent === true) {
+        partType = 'COTS';
+      }
+      // Rule 5: Common hardware/components (existing logic)
+      else if (partNameLower.includes('screw') || partNameLower.includes('bolt') || 
           partNameLower.includes('nut') || partNameLower.includes('washer') ||
           partNameLower.includes('bearing') || partNameLower.includes('motor') ||
           partNameLower.includes('sensor') || partNameLower.includes('wire') ||
+          partNameLower.includes('socket') || partNameLower.includes('cap screw') ||
+          partNameLower.includes('button head') || partNameLower.includes('standoff') ||
           descriptionLower.includes('purchased') || descriptionLower.includes('cots')) {
         partType = 'COTS';
       } else {
-        // Extract material from the row if available
-        if (row.material && typeof row.material === 'object') {
-          material = row.material.name || row.material.displayName || '';
-        } else if (typeof row.material === 'string') {
-          material = row.material;
+        // Default to manufactured
+        partType = 'manufactured';
+      }      // Get bounding box for manufactured parts and determine workflow
+      let boundingBox = { x: null, y: null, z: null };
+      if (partType === 'manufactured' && row.itemSource?.partId && row.itemSource?.elementId) {
+        try {
+          const wvm = selectedVersion ? 'v' : 'w';
+          const wvmId = selectedVersion ? selectedVersion.id : subsystem.onshape_workspace_id;
+          
+          const bbox = await onShapeAPI.getPartBoundingBox(
+            subsystem.onshape_document_id,
+            wvm,
+            wvmId,
+            row.itemSource.elementId, // Use the part's specific element ID, not the assembly element ID
+            row.itemSource.partId
+          );
+          
+          if (bbox && bbox.lowX !== undefined) {// Calculate dimensions from bounding box
+            boundingBox.x = Math.abs(bbox.highX - bbox.lowX);
+            boundingBox.y = Math.abs(bbox.highY - bbox.lowY);
+            boundingBox.z = Math.abs(bbox.highZ - bbox.lowZ);
+            
+            // Intelligent workflow categorization based on dimensions
+            if (boundingBox.x && boundingBox.y && boundingBox.z) {
+              const dimensions = [boundingBox.x, boundingBox.y, boundingBox.z].sort((a, b) => a - b);
+              const [smallest, middle, largest] = dimensions;
+              
+              // Convert from meters to inches for easier comparison (OnShape returns meters)
+              const smallestInches = smallest * 39.3701;
+              const middleInches = middle * 39.3701;
+              const largestInches = largest * 39.3701;
+              
+              // Rule 1: Plates under 0.5" thick -> laser or router (prefer laser except metals)
+              if (smallestInches < 0.5) {
+                const materialLower = material.toLowerCase();
+                if (materialLower.includes('aluminum') || materialLower.includes('steel') || 
+                    materialLower.includes('stainless') || materialLower.includes('titanium') ||
+                    materialLower.includes('brass') || materialLower.includes('copper')) {
+                  workflow = 'mill'; // Metals can't be laser cut
+                } else if (materialLower.includes('polycarbonate') || materialLower.includes('acrylic') ||
+                          materialLower.includes('delrin') || materialLower.includes('lexan') ||
+                          materialLower.includes('plexiglass') || materialLower.includes('pmma') ||
+                          materialLower.includes('wood') || materialLower.includes('mdf') ||
+                          materialLower.includes('plywood') || materialLower.includes('plastic')) {
+                  workflow = 'laser-cut'; // Common laser-cut materials
+                } else {
+                  workflow = 'laser-cut'; // Default to laser for thin non-metal materials
+                }
+              }
+              // Rule 2: Long stick-like shafts -> lathe
+              else if (largestInches > 4 * middleInches && largestInches > 4 * smallestInches) {
+                // If one dimension is significantly larger than the other two, it's shaft-like
+                workflow = 'lathe';
+              }
+              // Rule 3: Everything else with no dimension under 0.5" -> mill
+              else {
+                workflow = 'mill';
+              }
+              
+              console.log(`Part "${partName}" dimensions: ${smallestInches.toFixed(2)}" x ${middleInches.toFixed(2)}" x ${largestInches.toFixed(2)}" -> ${workflow}`);
+            }
+          }        } catch (error) {
+          console.warn(`Failed to get bounding box for part "${partName}" (${partNumber}):`, error.message);
+          // Don't let bounding box errors break the entire BOM processing
+          // Fall back to material-based workflow determination
+          if (material) {
+            const materialLower = material.toLowerCase();
+            if (materialLower.includes('aluminum') || materialLower.includes('steel') || 
+                materialLower.includes('stainless') || materialLower.includes('titanium') ||
+                materialLower.includes('brass') || materialLower.includes('copper')) {
+              workflow = 'mill';
+            } else if (materialLower.includes('polycarbonate') || materialLower.includes('acrylic') ||
+                      materialLower.includes('delrin') || materialLower.includes('lexan') ||
+                      materialLower.includes('plexiglass') || materialLower.includes('pmma') ||
+                      materialLower.includes('wood') || materialLower.includes('mdf') ||
+                      materialLower.includes('plywood')) {
+              workflow = 'laser-cut';
+            } else if (materialLower.includes('plastic') || materialLower.includes('pla') ||
+                       materialLower.includes('abs') || materialLower.includes('petg') ||
+                       materialLower.includes('nylon')) {
+              workflow = '3d-print';
+            } else {
+              workflow = 'mill'; // default
+            }
+          } else {
+            workflow = 'mill'; // default
+          }
         }
-        
-        // Determine workflow based on material
+      } else if (partType === 'manufactured') {
+        // For manufactured parts without bounding box, use material-based workflow
         if (material) {
           const materialLower = material.toLowerCase();
-          if (materialLower.includes('aluminum') || materialLower.includes('steel')) {
+          if (materialLower.includes('aluminum') || materialLower.includes('steel') || 
+              materialLower.includes('stainless') || materialLower.includes('titanium') ||
+              materialLower.includes('brass') || materialLower.includes('copper')) {
             workflow = 'mill';
-          } else if (materialLower.includes('wood') || materialLower.includes('mdf')) {
+          } else if (materialLower.includes('polycarbonate') || materialLower.includes('acrylic') ||
+                    materialLower.includes('delrin') || materialLower.includes('lexan') ||
+                    materialLower.includes('plexiglass') || materialLower.includes('pmma') ||
+                    materialLower.includes('wood') || materialLower.includes('mdf') ||
+                    materialLower.includes('plywood')) {
             workflow = 'laser-cut';
-          } else if (materialLower.includes('plastic') || materialLower.includes('pla')) {
+          } else if (materialLower.includes('plastic') || materialLower.includes('pla') ||
+                     materialLower.includes('abs') || materialLower.includes('petg') ||
+                     materialLower.includes('nylon')) {
             workflow = '3d-print';
           } else {
             workflow = 'mill'; // default
@@ -201,10 +363,10 @@
         part_type: partType,
         material: material,
         workflow: workflow,
-        onshape_part_id: row.partId || row.id || '',
-        bounding_box_x: null,
-        bounding_box_y: null,
-        bounding_box_z: null,
+        onshape_part_id: row.itemSource?.partId || row.rowId || '',
+        bounding_box_x: boundingBox.x,
+        bounding_box_y: boundingBox.y,
+        bounding_box_z: boundingBox.z,
         stock_assignment: '',
         status: 'pending'
       });
