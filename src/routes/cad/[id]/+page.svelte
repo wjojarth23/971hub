@@ -47,10 +47,11 @@
         .single();
 
       if (error) throw error;
-      subsystem = data;
-
-      if (subsystem.onshape_document_id) {
+      subsystem = data;      if (subsystem.onshape_document_id) {
+        console.log('Loading timeline for OnShape document:', subsystem.onshape_document_id);
         await loadTimeline();
+      } else {
+        console.log('No OnShape document linked to this subsystem');
       }
     } catch (error) {
       console.error('Error loading subsystem:', error);
@@ -58,23 +59,28 @@
     } finally {
       loading = false;
     }
-  }
-
-  async function loadTimeline() {
+  }  async function loadTimeline() {
     try {
-      // Get document versions and releases
-      const [versions, releases] = await Promise.all([
-        onShapeAPI.getDocumentVersions(subsystem.onshape_document_id),
-        onShapeAPI.getDocumentReleases(subsystem.onshape_document_id)
-      ]);
+      // Get document versions
+      const allVersions = await onShapeAPI.getDocumentVersions(subsystem.onshape_document_id);
+      console.log('OnShape all versions response:', allVersions);
+      
+      // Take the last 15 versions (newest first)
+      // Sort by creation date descending and take first 15
+      const sortedVersions = allVersions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const recentVersions = sortedVersions.slice(0, 15);
+      console.log('Recent 15 versions (newest first):', recentVersions);
 
-      // Combine and sort by date
-      const timelineItems = [
-        ...versions.map(v => ({ ...v, type: 'version', date: new Date(v.createdAt) })),
-        ...releases.map(r => ({ ...r, type: 'release', date: new Date(r.createdAt) }))
-      ].sort((a, b) => b.date - a.date);
+      // Process all versions - treat them all as buildable
+      const timelineItems = recentVersions.map(version => ({
+        ...version,
+        type: 'version', // All versions are buildable now
+        date: new Date(version.createdAt)
+      }));
 
       timeline = timelineItems;
+      
+      console.log('Final timeline items:', timeline);
     } catch (error) {
       console.error('Error loading timeline:', error);
       timeline = [];
@@ -93,23 +99,29 @@
       console.error('Error loading stock types:', error);
     }
   }
-
   async function createBuildFromRelease(release) {
     selectedVersion = release;
     loadingBOM = true;
     showBuildModal = true;
 
     try {
-      // Get BOM from OnShape
+      console.log('Creating build from release:', release);
+      
+      // Get BOM from OnShape using the specific version ID
       const bom = await onShapeAPI.getAssemblyBOM(
         subsystem.onshape_document_id,
-        release.workspaceId || subsystem.onshape_workspace_id,
-        subsystem.onshape_element_id
+        subsystem.onshape_workspace_id,
+        subsystem.onshape_element_id,
+        release.id // Pass the version ID to get BOM from that specific version
       );
+
+      console.log('BOM response:', bom);
 
       // Analyze and categorize BOM
       buildBOM = await analyzeBOM(bom);
       buildBOM = await autoAssignStock(buildBOM);
+
+      console.log('Processed BOM:', buildBOM);
 
     } catch (error) {
       console.error('Error loading BOM:', error);
@@ -119,68 +131,86 @@
       loadingBOM = false;
     }
   }
+  function isSubsystemMember() {
+    const isMember = subsystem?.subsystem_members?.some(member => member.user_id === user?.id);
+    console.log('Checking subsystem membership:', {
+      subsystem: subsystem?.name,
+      user: user?.id,
+      members: subsystem?.subsystem_members,
+      isMember
+    });
+    return isMember;
+  }
 
   async function analyzeBOM(bom) {
     const analyzedParts = [];
     
-    for (const item of bom.bomTable?.items || []) {
+    console.log('Analyzing BOM structure:', bom);
+    
+    // The BOM structure has rows array, not bomTable.items
+    for (const row of bom.rows || []) {
       let partType = 'manufactured';
       let material = '';
       let workflow = '';
       
+      // Extract part data from the row
+      const partName = row.item || row.name || 'Unknown Part';
+      const partNumber = row.partNumber || '';
+      const quantity = row.quantity || 1;
+      const description = row.description || '';
+      
       // Simple heuristics for part categorization
-      const partName = (item.item || '').toLowerCase();
-      if (partName.includes('screw') || partName.includes('bolt') || 
-          partName.includes('nut') || partName.includes('washer') ||
-          partName.includes('bearing') || partName.includes('motor') ||
-          partName.includes('sensor') || partName.includes('wire')) {
+      const partNameLower = partName.toLowerCase();
+      const descriptionLower = description.toLowerCase();
+      
+      if (partNameLower.includes('screw') || partNameLower.includes('bolt') || 
+          partNameLower.includes('nut') || partNameLower.includes('washer') ||
+          partNameLower.includes('bearing') || partNameLower.includes('motor') ||
+          partNameLower.includes('sensor') || partNameLower.includes('wire') ||
+          descriptionLower.includes('purchased') || descriptionLower.includes('cots')) {
         partType = 'COTS';
       } else {
-        // Try to get part properties for better categorization
-        try {
-          const properties = await onShapeAPI.getPartProperties(
-            subsystem.onshape_document_id,
-            selectedVersion.workspaceId || subsystem.onshape_workspace_id,
-            subsystem.onshape_element_id,
-            item.partId
-          );
-          
-          if (properties.material) {
-            material = properties.material;
-            
-            // Determine workflow based on material
-            if (material.toLowerCase().includes('aluminum') || material.toLowerCase().includes('steel')) {
-              workflow = 'mill';
-            } else if (material.toLowerCase().includes('wood') || material.toLowerCase().includes('mdf')) {
-              workflow = 'laser-cut';
-            } else if (material.toLowerCase().includes('plastic') || material.toLowerCase().includes('pla')) {
-              workflow = '3d-print';
-            } else {
-              workflow = 'mill'; // default
-            }
+        // Extract material from the row if available
+        if (row.material && typeof row.material === 'object') {
+          material = row.material.name || row.material.displayName || '';
+        } else if (typeof row.material === 'string') {
+          material = row.material;
+        }
+        
+        // Determine workflow based on material
+        if (material) {
+          const materialLower = material.toLowerCase();
+          if (materialLower.includes('aluminum') || materialLower.includes('steel')) {
+            workflow = 'mill';
+          } else if (materialLower.includes('wood') || materialLower.includes('mdf')) {
+            workflow = 'laser-cut';
+          } else if (materialLower.includes('plastic') || materialLower.includes('pla')) {
+            workflow = '3d-print';
+          } else {
+            workflow = 'mill'; // default
           }
-        } catch (propError) {
-          console.warn('Could not fetch part properties:', propError);
+        } else {
           workflow = 'mill'; // default
         }
       }
       
       analyzedParts.push({
-        part_name: item.item || 'Unknown Part',
-        part_number: item.partNumber || '',
-        quantity: item.quantity || 1,
+        part_name: partName,
+        part_number: partNumber,
+        quantity: quantity,
         part_type: partType,
         material: material,
         workflow: workflow,
-        onshape_part_id: item.partId || '',
-        bounding_box_x: item.boundingBox?.x || null,
-        bounding_box_y: item.boundingBox?.y || null,
-        bounding_box_z: item.boundingBox?.z || null,
+        onshape_part_id: row.partId || row.id || '',
+        bounding_box_x: null,
+        bounding_box_y: null,
+        bounding_box_z: null,
         stock_assignment: '',
         status: 'pending'
       });
     }
     
+    console.log('Analyzed parts:', analyzedParts);
     return analyzedParts;
   }
 
@@ -288,10 +318,6 @@
     const manufacturedItems = buildBOM.filter(item => item.part_type === 'manufactured');
     alert(`Would add all ${manufacturedItems.length} manufactured parts to parts list`);
   }
-
-  function isSubsystemMember() {
-    return subsystem?.subsystem_members?.some(member => member.user_id === user?.id);
-  }
 </script>
 
 <svelte:head>
@@ -318,9 +344,7 @@
           {/if}
         </div>
       </div>
-    </header>
-
-    {#if subsystem.onshape_document_id}
+    </header>    {#if subsystem.onshape_document_id}
       <section class="timeline-section">
         <h2>OnShape Timeline</h2>
         <div class="timeline-container">
@@ -342,7 +366,7 @@
                   {#if item.description}
                     <p class="timeline-description">{item.description}</p>
                   {/if}
-                  {#if item.type === 'release' && isSubsystemMember()}
+                  {#if isSubsystemMember()}
                     <button 
                       class="btn btn-primary btn-sm"
                       on:click={() => createBuildFromRelease(item)}
@@ -350,9 +374,14 @@
                       <Settings size={14} />
                       Create Build
                     </button>
+                  {:else}
+                    <!-- Debug: Show why button is not visible -->
+                    <p style="color: red; font-size: 12px;">Not a member or timeline empty. Timeline length: {timeline.length}</p>
                   {/if}
                 </div>
               </div>
+            {:else}
+              <p>No timeline items found. Timeline data: {JSON.stringify(timeline)}</p>
             {/each}
           </div>
         </div>

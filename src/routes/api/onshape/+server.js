@@ -29,6 +29,13 @@ export async function GET({ url }) {
             case 'versions':
                 apiPath = `/api/v11/documents/d/${documentId}/versions`;
                 break;
+            case 'version-details':
+                const versionId = url.searchParams.get('versionId');
+                if (!versionId) {
+                    return json({ error: 'Missing versionId for version details request' }, { status: 400 });
+                }
+                apiPath = `/api/v11/documents/d/${documentId}/v/${versionId}`;
+                break;
             case 'assembly-info':
                 if (!workspaceId || !elementId) {
                     return json({ error: 'Missing workspaceId or elementId for assembly info request' }, { status: 400 });
@@ -44,7 +51,7 @@ export async function GET({ url }) {
                 apiPath = `/api/v11/assemblies/d/${documentId}/${wvm}/${wvmid}/e/${elementId}/bom`;
                 break;
             default:
-                return json({ error: 'Invalid action. Available actions: document-info, versions, assembly-info, assembly-bom' }, { status: 400 });
+                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom' }, { status: 400 });
         }const response = await fetch(`${ONSHAPE_BASE_URL}${apiPath}`, {
             method: 'GET',
             headers: getAuthHeaders()
