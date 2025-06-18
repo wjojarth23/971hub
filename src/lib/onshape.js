@@ -1,4 +1,5 @@
 import { PUBLIC_ONSHAPE_ACCESS_KEY, PUBLIC_ONSHAPE_SECRET_KEY, PUBLIC_ONSHAPE_BASE_URL } from '$env/static/public';
+import { chatGPTService } from './chatgpt.js';
 
 class OnShapeAPI {
     constructor() {
@@ -164,20 +165,20 @@ class OnShapeAPI {
     async getPartProperties(documentId, workspaceId, elementId, partId) {
         console.warn('Part properties endpoint not available in current OnShape API structure. Using empty object.');
         return {};
-    }// Analyze BOM and categorize parts
+    }    // Analyze BOM and categorize parts using ChatGPT
     async analyzeBOM(bom) {
         const analyzedParts = [];
         
         // BOM data structure:
         // - headers: array of {id, name, propertyName, valueType}
-        // - rows: array of objects where keys are header IDs and values are the cell values
+        // - rows: array of objects with headerIdToValue mapping
         const bomItems = bom.rows || [];
         const headers = bom.headers || [];
         
         console.log('Processing BOM items:', bomItems.length);
         console.log('BOM headers:', headers);
         
-        // Create a map of header IDs to property names for easier lookup
+        // Create a map of header IDs to property information
         const headerMap = {};
         headers.forEach(header => {
             headerMap[header.id] = {
@@ -192,138 +193,178 @@ class OnShapeAPI {
         // Debug: log the first few items to see their structure
         if (bomItems.length > 0) {
             console.log('First BOM item structure:', bomItems[0]);
-            console.log('Available properties:', Object.keys(bomItems[0]));
+            console.log('Header ID to value mapping:', bomItems[0].headerIdToValue);
         }
+        
+        // Prepare data for ChatGPT analysis
+        const bomDataForAI = [];
         
         for (const item of bomItems) {
             try {
                 console.log('Processing BOM item:', item);
                 
-                let partType = 'manufactured';
-                let material = '';
-                let workflow = '';
+                // Skip items that are excluded from BOM
+                if (item.excludeFromBom === true) {
+                    console.log('Skipping item excluded from BOM');
+                    continue;
+                }
                 
-                // Extract part information using header mapping
+                // Extract part information using OnShape's headerIdToValue structure
+                const headerValues = item.headerIdToValue || {};
+                
                 let partName = 'Unknown Part';
                 let partNumber = '';
                 let quantity = 1;
                 let partId = '';
                 let description = '';
+                let material = '';
+                let vendor = '';
                 
                 // Map the row data using headers
-                for (const [headerId, value] of Object.entries(item)) {
+                for (const [headerId, value] of Object.entries(headerValues)) {
                     const header = headerMap[headerId];
                     if (!header) continue;
+                    
+                    console.log(`Processing header ${headerId} (${header.propertyName}):`, value);
                     
                     switch (header.propertyName) {
                         case 'item':
                         case 'name':
-                            if (value) partName = value;
+                            if (value) partName = String(value);
                             break;
                         case 'partNumber':
-                            if (value) partNumber = value;
+                            if (value) partNumber = String(value);
                             break;
                         case 'quantity':
                             if (value) quantity = parseFloat(value) || 1;
                             break;
                         case 'description':
-                            if (value) description = value;
+                            if (value) description = String(value);
+                            break;
+                        case 'vendor':
+                            if (value) vendor = String(value);
                             break;
                         case 'material':
                             if (value && typeof value === 'object') {
-                                material = value.name || value.displayName || String(value);
+                                material = value.displayName || value.name || String(value);
                             } else if (value) {
                                 material = String(value);
                             }
                             break;
                     }
-                    
-                    // Store part ID if this looks like an ID field
-                    if (header.propertyName.includes('Id') || header.propertyName.includes('id')) {
-                        partId = value || '';
-                    }
                 }
                 
-                console.log('Extracted data:', { partName, partNumber, quantity, partId, description, material });
-                
-                // Skip items that are excluded from BOM
-                if (item.excludeFromBom === true) {
-                    console.log('Skipping item excluded from BOM:', partName);
-                    continue;
+                // Get part ID from item source
+                if (item.itemSource && item.itemSource.partId) {
+                    partId = item.itemSource.partId;
                 }
                 
-                // Get part properties if available
-                if (partId && partId !== '') {
+                console.log('Extracted data:', { 
+                    partName, 
+                    partNumber, 
+                    quantity, 
+                    partId, 
+                    description, 
+                    material, 
+                    vendor 
+                });
+                  // Get bounding box information if available
+                let boundingBox = null;
+                let boundingBoxX = null;
+                let boundingBoxY = null;
+                let boundingBoxZ = null;
+                
+                if (partId && partId !== '' && item.itemSource?.elementId) {
                     try {
-                        const properties = await this.getPartProperties(
+                        // Try to get bounding box, but don't let failures block the analysis
+                        const bbox = await this.getPartBoundingBox(
                             bom.bomSource?.document?.id || bom.documentId,
-                            bom.bomSource?.version?.id || bom.versionId,
-                            bom.bomSource?.element?.id || bom.elementId,
+                            'w', // workspace
+                            bom.bomSource?.workspace?.id || bom.workspaceId,
+                            item.itemSource.elementId, // Use the part's specific element ID
                             partId
                         );
                         
-                        // Analyze properties to determine part type and workflow
-                        if (properties.material) {
-                            material = properties.material;
+                        if (bbox && bbox.highX !== undefined && bbox.lowX !== undefined) {
+                            boundingBoxX = Math.abs(bbox.highX - bbox.lowX); // Keep in meters for now
+                            boundingBoxY = Math.abs(bbox.highY - bbox.lowY);
+                            boundingBoxZ = Math.abs(bbox.highZ - bbox.lowZ);
+                            boundingBox = `${(boundingBoxX * 1000).toFixed(1)}x${(boundingBoxY * 1000).toFixed(1)}x${(boundingBoxZ * 1000).toFixed(1)}mm`;
+                            
+                            console.log(`Successfully got bounding box for ${partName}:`, boundingBox);
                         }
-                    } catch (propError) {
-                        console.warn('Could not fetch part properties:', propError);
+                    } catch (bboxError) {
+                        console.warn(`Could not fetch bounding box for "${partName}" (${partNumber}):`, bboxError.message);
+                        // Continue without bounding box - this is not critical for classification
                     }
-                }
-                
-                // Simple heuristics for part categorization
-                const lowerPartName = partName.toLowerCase();
-                if (lowerPartName.includes('screw') || lowerPartName.includes('bolt') || 
-                    lowerPartName.includes('nut') || lowerPartName.includes('washer') ||
-                    lowerPartName.includes('bearing') || lowerPartName.includes('motor')) {
-                    partType = 'COTS';
                 } else {
-                    // Determine workflow based on material and geometry
-                    if (material.toLowerCase().includes('aluminum') || material.toLowerCase().includes('steel')) {
-                        workflow = 'mill';
-                    } else if (material.toLowerCase().includes('wood') || material.toLowerCase().includes('mdf')) {
-                        workflow = 'laser-cut';
-                    } else if (material.toLowerCase().includes('plastic') || material.toLowerCase().includes('pla')) {
-                        workflow = '3d-print';
-                    } else {
-                        workflow = 'mill'; // default
-                    }
+                    console.log(`Skipping bounding box for "${partName}" - missing partId or elementId`);
                 }
                 
-                analyzedParts.push({
-                    part_name: partName,
-                    part_number: partNumber,
-                    quantity: quantity,
-                    part_type: partType,
+                // Add to data for AI analysis
+                bomDataForAI.push({
+                    name: partName,
+                    description: description,
+                    vendor: vendor,
                     material: material,
-                    workflow: workflow,
-                    onshape_part_id: partId,
-                    bounding_box_x: null,
-                    bounding_box_y: null,
-                    bounding_box_z: null,
-                    stock_assignment: '',
-                    status: 'pending'
+                    part_number: partNumber,
+                    bounding_box: boundingBox || 'Unknown',
+                    bounding_box_x: boundingBoxX,
+                    bounding_box_y: boundingBoxY,
+                    bounding_box_z: boundingBoxZ,
+                    quantity: quantity,
+                    onshape_part_id: partId
                 });
+                
             } catch (error) {
-                console.error('Error analyzing BOM item:', error);
-                // Add with default values if analysis fails
-                analyzedParts.push({
-                    part_name: 'Unknown Part',
-                    part_number: '',
-                    quantity: 1,
-                    part_type: 'manufactured',
-                    material: '',
-                    workflow: 'mill',
-                    onshape_part_id: '',
-                    bounding_box_x: null,
-                    bounding_box_y: null,
-                    bounding_box_z: null,
-                    stock_assignment: '',
-                    status: 'pending'
-                });
+                console.error('Error processing BOM item:', error);
             }
         }
         
+        console.log('BOM data prepared for AI:', bomDataForAI);
+        
+        // Use ChatGPT to classify parts
+        let classifications = [];
+        try {
+            console.log('Sending BOM data to ChatGPT for classification...');
+            classifications = await chatGPTService.classifyParts(bomDataForAI);
+            console.log('ChatGPT classifications received:', classifications);
+        } catch (aiError) {
+            console.warn('ChatGPT classification failed, using fallback method:', aiError);
+            classifications = chatGPTService.fallbackClassification(bomDataForAI);
+        }
+        
+        // Combine BOM data with AI classifications
+        for (let i = 0; i < bomDataForAI.length; i++) {
+            const bomItem = bomDataForAI[i];
+            const classification = classifications[i] || {
+                classification: 'manufactured',
+                manufacturing_process: 'mill'
+            };
+            
+            // Map classification to our part type system
+            let partType = classification.classification === 'COTS' ? 'COTS' : 'manufactured';
+            let workflow = classification.manufacturing_process || 'mill';
+            
+            analyzedParts.push({
+                part_name: bomItem.name,
+                part_number: bomItem.part_number,
+                quantity: bomItem.quantity,
+                part_type: partType,
+                material: bomItem.material,
+                workflow: workflow,
+                onshape_part_id: bomItem.onshape_part_id,
+                bounding_box_x: bomItem.bounding_box_x,
+                bounding_box_y: bomItem.bounding_box_y,
+                bounding_box_z: bomItem.bounding_box_z,
+                stock_assignment: '',
+                status: 'pending',
+                vendor: bomItem.vendor,
+                description: bomItem.description
+            });
+        }
+        
+        console.log('Final analyzed parts:', analyzedParts);
         return analyzedParts;
     }
 

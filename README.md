@@ -1,22 +1,72 @@
-# sv
+# 971 Hub - Manufacturing Management System
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A comprehensive manufacturing management system built with SvelteKit, featuring OnShape CAD integration and AI-powered BOM analysis.
 
-## Creating a project
+## Features
 
-If you're seeing this, you've probably already done this step. Congrats!
+- **OnShape Integration**: Connect CAD documents and analyze assemblies
+- **AI-Powered BOM Classification**: Uses ChatGPT-4-mini to intelligently classify parts as COTS or manufactured
+- **Manufacturing Process Assignment**: Automatically assigns appropriate manufacturing processes (mill, laser-cut, 3D-print, etc.)
+- **Stock Management**: Track and assign stock materials to parts
+- **Build Management**: Create and manage manufacturing builds
+- **User Authentication**: Secure user management with Supabase
 
-```bash
-# create a new project in the current directory
-npx sv create
+## New: ChatGPT Integration
 
-# create a new project in my-app
-npx sv create my-app
-```
+The system now includes ChatGPT-4-mini integration for intelligent part classification:
+
+- **Intelligent Classification**: AI determines if parts are COTS or manufactured
+- **Process Assignment**: Recommends manufacturing processes based on materials and geometry
+- **Confidence Levels**: Shows AI confidence in decisions
+- **Fallback Logic**: Automatic fallback to rule-based classification if AI is unavailable
+
+See [CHATGPT_INTEGRATION.md](./CHATGPT_INTEGRATION.md) for detailed setup instructions.
+
+## Setup
+
+### Prerequisites
+
+- Node.js 18+
+- Supabase account
+- OnShape developer account
+- OpenAI API key (for ChatGPT integration)
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Set up environment variables:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env` with your credentials:
+   ```env
+   # OpenAI API Key for ChatGPT integration
+   OPENAI_API_KEY=sk-your-openai-key-here
+   
+   # OnShape API Configuration
+   PUBLIC_ONSHAPE_ACCESS_KEY=your_onshape_access_key
+   PUBLIC_ONSHAPE_SECRET_KEY=your_onshape_secret_key
+   PUBLIC_ONSHAPE_BASE_URL=https://cad.onshape.com
+   
+   # Supabase Configuration
+   PUBLIC_SUPABASE_URL=your_supabase_url
+   PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+
+4. Set up the database using the provided SQL files:
+   - `database_schema.sql`
+   - `database_subsystems.sql`
+   - `supabase.sql`
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Start the development server:
 
 ```bash
 npm run dev
@@ -25,14 +75,46 @@ npm run dev
 npm run dev -- --open
 ```
 
+## Testing ChatGPT Integration
+
+Test the ChatGPT API connection:
+
+```bash
+node test-chatgpt.js
+```
+
 ## Building
 
-To create a production version of your app:
+To create a production version:
 
 ```bash
 npm run build
 ```
 
-You can preview the production build with `npm run preview`.
+Preview the production build:
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+```bash
+npm run preview
+```
+
+## Project Structure
+
+- `/src/lib/` - Shared libraries and utilities
+  - `onshape.js` - OnShape API integration
+  - `chatgpt.js` - ChatGPT service for BOM classification
+  - `supabase.js` - Database connection
+- `/src/routes/` - SvelteKit routes
+  - `/api/chatgpt/` - Server-side ChatGPT API endpoint
+  - `/cad/` - CAD management pages
+- `/static/` - Static assets
+
+## Documentation
+
+- [ChatGPT Integration Guide](./CHATGPT_INTEGRATION.md) - Detailed setup and usage
+- [Supabase Setup](./SUPABASE_SETUP.md) - Database configuration
+
+## Deployment
+
+The app can be deployed to any SvelteKit-compatible platform. Make sure to configure environment variables in your deployment environment.
+
+> You may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

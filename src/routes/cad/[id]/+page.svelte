@@ -4,6 +4,7 @@
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
   import { onShapeAPI } from '$lib/onshape.js';
+  import { chatGPTService } from '$lib/chatgpt.js';
   import { goto } from '$app/navigation';
   import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy } from 'lucide-svelte';
 
@@ -141,6 +142,24 @@
     });
     return isMember;
   }  async function analyzeBOM(bom) {
+    console.log('Analyzing BOM with ChatGPT enhancement...');
+    
+    try {
+      // Use the enhanced OnShape API with ChatGPT integration
+      const analyzedParts = await onShapeAPI.analyzeBOM(bom);
+      console.log('ChatGPT-enhanced BOM analysis completed:', analyzedParts);
+      return analyzedParts;
+    } catch (error) {
+      console.error('Error with ChatGPT-enhanced BOM analysis:', error);
+      
+      // Fallback to original logic if ChatGPT fails
+      console.log('Falling back to original BOM analysis logic...');
+      return await fallbackAnalyzeBOM(bom);
+    }
+  }
+
+  // Fallback BOM analysis (original logic)
+  async function fallbackAnalyzeBOM(bom) {
     const analyzedParts = [];
     
     console.log('Analyzing BOM structure:', bom);
@@ -372,7 +391,7 @@
       });
     }
     
-    console.log('Analyzed parts:', analyzedParts);
+    console.log('Analyzed parts (fallback):', analyzedParts);
     return analyzedParts;
   }
 
@@ -480,6 +499,57 @@
     const manufacturedItems = buildBOM.filter(item => item.part_type === 'manufactured');
     alert(`Would add all ${manufacturedItems.length} manufactured parts to parts list`);
   }
+
+  async function testChatGPTConnection() {
+    try {
+      const response = await fetch('/api/chatgpt', {
+        method: 'GET'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        alert('✅ ChatGPT API connection successful! Your OpenAI API key is working correctly.');
+      } else {
+        alert('❌ ChatGPT API connection failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      alert('❌ Error testing ChatGPT connection: ' + error.message);
+    }
+  }
+
+  // Debug function to test BOM data extraction
+  async function debugBOMStructure() {
+    if (buildBOM.length > 0) {
+      console.log('=== BOM DEBUG INFO ===');
+      console.log('Total parts:', buildBOM.length);
+      
+      buildBOM.slice(0, 3).forEach((part, index) => {
+        console.log(`\nPart ${index + 1}:`);
+        console.log('  Name:', part.part_name);
+        console.log('  Number:', part.part_number);
+        console.log('  Material:', part.material);
+        console.log('  Type:', part.part_type);
+        console.log('  Workflow:', part.workflow);
+        console.log('  Vendor:', part.vendor);
+        console.log('  Description:', part.description);
+        console.log('  Bounding Box:', part.bounding_box_x ? `${(part.bounding_box_x*1000).toFixed(1)}x${(part.bounding_box_y*1000).toFixed(1)}x${(part.bounding_box_z*1000).toFixed(1)}mm` : 'Not available');
+      });
+      
+      const cotsCount = buildBOM.filter(p => p.part_type === 'COTS').length;
+      const manufacturedCount = buildBOM.filter(p => p.part_type === 'manufactured').length;
+      console.log(`\nCOTS parts: ${cotsCount}`);
+      console.log(`Manufactured parts: ${manufacturedCount}`);
+      
+      const workflowCounts = {};
+      buildBOM.forEach(part => {
+        if (part.workflow) {
+          workflowCounts[part.workflow] = (workflowCounts[part.workflow] || 0) + 1;
+        }
+      });
+      console.log('Workflow distribution:', workflowCounts);
+    }
+  }
 </script>
 
 <svelte:head>
@@ -570,8 +640,7 @@
               <div class="loading-spinner"></div>
               <p>Loading BOM...</p>
             </div>
-          {:else}
-            <div class="bom-actions">
+          {:else}            <div class="bom-actions">
               <button class="btn btn-warning" on:click={addAllCOTSToPurchasing}>
                 <ShoppingCart size={16} />
                 Add All COTS to Purchasing
@@ -584,9 +653,14 @@
                 <Copy size={16} />
                 Build Duplicate
               </button>
-            </div>
-
-            <div class="bom-table-container">
+              <button class="btn btn-outline" on:click={testChatGPTConnection}>
+                <Settings size={16} />
+                Test AI Connection
+              </button>
+              <button class="btn btn-outline" on:click={debugBOMStructure}>
+                🐛 Debug BOM
+              </button>
+            </div><div class="bom-table-container">
               <table class="bom-table">
                 <thead>
                   <tr>
@@ -596,6 +670,7 @@
                     <th>Type</th>
                     <th>Material</th>
                     <th>Workflow</th>
+                    <th>Bounding Box</th>
                     <th>Stock Assignment</th>
                     <th>Action</th>
                   </tr>
@@ -603,7 +678,14 @@
                 <tbody>
                   {#each buildBOM as item, index}
                     <tr>
-                      <td>{item.part_name}</td>
+                      <td>
+                        <div class="part-name">
+                          {item.part_name}
+                          {#if item.description}
+                            <div class="part-description">{item.description}</div>
+                          {/if}
+                        </div>
+                      </td>
                       <td>{item.part_number || '-'}</td>
                       <td>{item.quantity}</td>
                       <td>
@@ -612,7 +694,23 @@
                         </span>
                       </td>
                       <td>{item.material || '-'}</td>
-                      <td>{item.workflow || '-'}</td>
+                      <td>
+                        {#if item.workflow}
+                          <span class="workflow-badge workflow-{item.workflow.replace('-', '')}">
+                            {item.workflow}
+                          </span>
+                        {:else}
+                          -
+                        {/if}
+                      </td>                      <td>
+                        {#if item.bounding_box_x && item.bounding_box_y && item.bounding_box_z}
+                          <div class="bounding-box">
+                            {(item.bounding_box_x * 1000).toFixed(1)} × {(item.bounding_box_y * 1000).toFixed(1)} × {(item.bounding_box_z * 1000).toFixed(1)} mm
+                          </div>
+                        {:else}
+                          <span class="no-data">No dimensions</span>
+                        {/if}
+                      </td>
                       <td>
                         <select bind:value={item.stock_assignment}>
                           <option value="">Select Stock</option>
@@ -901,87 +999,127 @@
     color: var(--secondary);
   }
 
-  .type-badge {
-    padding: 0.25rem 0.75rem;
+  /* AI-Enhanced BOM Table Styles */
+  .part-name {
+    font-weight: 500;
+  }
+  
+  .part-description {
+    font-size: 0.75rem;
+    color: var(--secondary);
+    margin-top: 0.25rem;
+  }
+  
+  .workflow-badge {
+    padding: 0.25rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
-    font-weight: 600;
+    font-weight: 500;
+    display: inline-block;
     text-transform: uppercase;
   }
-
-  .type-cots {
-    background: var(--warning);
-    color: var(--primary);
+  
+  .workflow-mill {
+    background: #e3f2fd;
+    color: #1976d2;
+    border: 1px solid #bbdefb;
   }
-
-  .type-manufactured {
-    background: var(--success);
-    color: var(--primary);
+  
+  .workflow-lasercut {
+    background: #fff3e0;
+    color: #f57c00;
+    border: 1px solid #ffcc02;
   }
-
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
+  
+  .workflow-3dprint {
+    background: #f3e5f5;
+    color: #7b1fa2;
+    border: 1px solid #ce93d8;
   }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface);
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
+  
+  .workflow-router {
+    background: #e8f5e8;
+    color: #388e3c;
+    border: 1px solid #a5d6a7;
   }
-
-  .btn:hover {
-    background: var(--background);
-    border-color: var(--primary);
-    color: var(--primary);
-  }
-
-  .btn-primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: var(--surface);
-  }
-
-  .btn-primary:hover {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: var(--surface);
-    opacity: 0.9;
-  }
-
-  .btn-secondary {
-    background: var(--secondary);
-    border-color: var(--secondary);
-    color: var(--surface);
-  }
-
-  .btn-warning {
-    background: var(--warning);
-    border-color: var(--warning);
-    color: var(--primary);
-  }
-
-  .btn-outline {
-    background: transparent;
-    border-color: var(--border);
-  }
-
-  .btn-sm {
-    padding: 0.375rem 0.75rem;
+  
+  .type-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
     font-size: 0.75rem;
+    font-weight: 500;
+    display: inline-block;
+    text-transform: uppercase;
+  }
+  
+  .type-cots {
+    background: #fff8e1;
+    color: #f57f17;
+    border: 1px solid #ffcc02;
+  }
+  
+  .type-manufactured {
+    background: #e1f5fe;
+    color: #0277bd;
+    border: 1px solid #81d4fa;
+  }
+  
+  .bounding-box {
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: var(--secondary);
+  }
+  
+  .ai-reasoning {
+    font-size: 0.8rem;
+    color: var(--secondary);
+    max-width: 200px;
+    cursor: help;
+  }
+  
+  .fallback-indicator {
+    font-size: 0.75rem;
+    color: var(--warning);
+    font-style: italic;
+  }
+  
+  .confidence-bar {
+    position: relative;
+    width: 60px;
+    height: 16px;
+    background: #f0f0f0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  
+  .confidence-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff5722 0%, #ff9800 50%, #4caf50 100%);
+    transition: width 0.3s ease;
+  }
+  
+  .confidence-text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #333;
+  }
+  
+  .bom-table th {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+  
+  .bom-table td {
+    vertical-align: top;
+    padding: 0.75rem 0.5rem;
   }
 
   .loading-container {
@@ -1039,5 +1177,11 @@
     background: var(--surface);
     color: var(--text);
     font-size: 0.875rem;
+  }
+
+  .no-data {
+    color: var(--secondary);
+    font-style: italic;
+    font-size: 0.75rem;
   }
 </style>
