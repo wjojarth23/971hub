@@ -209,21 +209,72 @@
                     </button>
                   {/if}
                 </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <div class="empty-state">
-            <Package size={48} />
-            <h3>No Builds Yet</h3>
-            <p>Create your first build from the CAD subsystems page</p>
-            <a href="/cad" class="btn btn-primary">
-              Go to CAD Subsystems
-            </a>
-          </div>
-        {/if}      </section>
-    </div>
+              <!-- PARTS TABLE FOR EACH BUILD -->
+              {#if build.build_bom && build.build_bom.length > 0}
+                <div class="parts-table-container" style="margin-top:1.5rem;">
+                  <table class="parts-table">
+                    <thead>
+                      <tr>
+                        <th>Part Name</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>File</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each build.build_bom as part}
+                        <tr>
+                          <td>{part.part_name}</td>
+                          <td>{part.part_type}</td>
+                          <td>
+                            {#if part.status === 'manufactured'}
+                              <span style="color: #27ae60;">Manufactured</span>
+                            {:else if part.status === 'pending'}
+                              <span style="color: #f39c12;">Pending</span>
+                            {:else if part.status === 'delivered'}
+                              <span style="color: #2980b9;">Delivered</span>
+                            {:else}
+                              <span>{part.status}</span>
+                            {/if}
+                          </td>
+                          <td>
+                            {#if part.file_url}
+                              <a href={part.file_url} target="_blank" class="btn btn-sm btn-secondary">Download</a>
+                            {:else}
+                              <span style="color:#aaa;">N/A</span>
+                            {/if}
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+                <!-- BUILD FINISHED BUTTON LOGIC -->
+                {#if build.status !== 'assembled'}
+                  {#if build.build_bom.every(part => (part.part_type === 'COTS' ? part.status === 'delivered' : part.status === 'manufactured'))}
+                    <button class="btn btn-success" style="margin-top:1rem;" on:click={() => markAsAssembled(build.id)}>
+                      <CheckCircle size={14} />
+                      Build Finished
+                    </button>
+                  {/if}
+                {/if}
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="empty-state">
+          <Package size={48} />
+          <h3>No Builds Yet</h3>
+          <p>Create your first build from the CAD subsystems page</p>
+          <a href="/cad" class="btn btn-primary">
+            Go to CAD Subsystems
+          </a>
+        </div>
+      {/if}
+    </section>
   </div>
+</div>
 {:else}
   <div class="error-container">
     <p>Please log in to access the Build Center.</p>

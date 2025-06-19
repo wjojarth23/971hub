@@ -20,6 +20,8 @@ CREATE TABLE public.build_bom (
   added_to_purchasing boolean DEFAULT false,
   CONSTRAINT build_bom_pkey PRIMARY KEY (id),
   CONSTRAINT build_bom_build_id_fkey FOREIGN KEY (build_id) REFERENCES public.builds(id)
+-- Add file_url to build_bom for manufacturing file links (parasolid, STL, etc.)
+ALTER TABLE public.build_bom ADD COLUMN file_url text;
 );
 CREATE TABLE public.builds (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

@@ -3,10 +3,10 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { onShapeAPI } from '$lib/onshape.js';
-  import { chatGPTService } from '$lib/chatgpt.js';
+  import { onShapeAPI } from '$lib/onshape.js';  import { partClassificationService } from '$lib/chatgpt.js';
   import { goto } from '$app/navigation';
   import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy } from 'lucide-svelte';
+  import stockData from '$lib/stock.json';
 
   let subsystemId = $page.params.id;
   let user = null;
@@ -118,13 +118,24 @@
         release.id // Pass the version ID to get BOM from that specific version
       );
 
-      console.log('BOM response:', bom);
-
-      // Analyze and categorize BOM
+      console.log('BOM response:', bom);      // Analyze and categorize BOM
+      console.log('About to call analyzeBOM...');
       buildBOM = await onShapeAPI.analyzeBOM(bom, subsystem.onshape_workspace_id);
-      buildBOM = await autoAssignStock(buildBOM);
+      console.log('analyzeBOM returned:', buildBOM);
+      console.log('buildBOM type:', typeof buildBOM);
+      console.log('buildBOM is array:', Array.isArray(buildBOM));
+      
+      // Auto-assign stock for all manufactured parts
+      if (buildBOM && Array.isArray(buildBOM)) {
+        console.log('Auto-assigning stock for', buildBOM.length, 'parts');
+        buildBOM.forEach((part, index) => {
+          autoAssignStock(index);
+        });
+      } else {
+        console.error('buildBOM is not an array or is null/undefined:', buildBOM);
+      }
 
-      console.log('Processed BOM:', buildBOM);
+      console.log('Final processed BOM:', buildBOM);
 
     } catch (error) {
       console.error('Error loading BOM:', error);
@@ -144,19 +155,36 @@
     });
     return isMember;
   }  async function analyzeBOM(bom) {
-    console.log('Analyzing BOM with ChatGPT enhancement...');
+    console.log('Analyzing BOM with manual classification rules...');
     
     try {
-      // Use the enhanced OnShape API with ChatGPT integration
+      // Use the enhanced OnShape API with manual classification
       const analyzedParts = await onShapeAPI.analyzeBOM(bom);
-      console.log('ChatGPT-enhanced BOM analysis completed:', analyzedParts);
+      console.log('Manual classification BOM analysis completed:', analyzedParts);
+      
+      // Auto-assign stock for all parts
+      analyzedParts.forEach((part, index) => {
+        if (part.part_type === 'manufactured') {
+          autoAssignStock(index);
+        }
+      });
+      
       return analyzedParts;
     } catch (error) {
-      console.error('Error with ChatGPT-enhanced BOM analysis:', error);
+      console.error('Error with manual classification BOM analysis:', error);
       
-      // Fallback to original logic if ChatGPT fails
+      // Fallback to original logic if classification fails
       console.log('Falling back to original BOM analysis logic...');
-      return await fallbackAnalyzeBOM(bom);
+      const fallbackParts = await fallbackAnalyzeBOM(bom);
+      
+      // Auto-assign stock for fallback parts too
+      fallbackParts.forEach((part, index) => {
+        if (part.part_type === 'manufactured') {
+          autoAssignStock(index);
+        }
+      });
+      
+      return fallbackParts;
     }
   }
 
@@ -396,23 +424,74 @@
     console.log('Analyzed parts (fallback):', analyzedParts);
     return analyzedParts;
   }
-
-  async function autoAssignStock(parts) {
-    for (const part of parts) {
-      if (part.part_type === 'manufactured' && part.material) {
-        // Find matching stock type
-        const matchingStock = stockTypes.find(stock => 
-          stock.material.toLowerCase().includes(part.material.toLowerCase()) &&
-          stock.workflow === part.workflow
-        );
-        
-        if (matchingStock) {
-          part.stock_assignment = `${matchingStock.material} - ${matchingStock.stock_type}`;
+  // Function to auto-assign stock based on part properties (updated version)
+  function autoAssignStock(index) {
+    const part = buildBOM[index];
+    if (!part || part.part_type === 'COTS') return;
+    
+    const workflow = part.workflow;
+    const material = (part.material || '').toLowerCase();
+    const dimX = part.bounding_box_x * 39.3701; // Convert to inches
+    const dimY = part.bounding_box_y * 39.3701;
+    const dimZ = part.bounding_box_z * 39.3701;
+    const dimensions = [dimX, dimY, dimZ].sort((a, b) => a - b);
+    const [minDim, midDim, maxDim] = dimensions;
+    
+    const workflowStocks = stockData[workflow] || [];
+    let bestMatch = null;
+    
+    // Find best matching stock
+    for (const stock of workflowStocks) {
+      if (material.includes(stock.material.toLowerCase())) {
+        if (workflow === 'laser-cut') {
+          // Match by thickness for sheet materials
+          if (stock.thickness && Math.abs(minDim - stock.thickness) < 0.1) {
+            bestMatch = stock;
+            break;
+          }
+        } else if (workflow === 'lathe') {
+          // Match by diameter for round stock
+          if (stock.diameter && Math.abs(maxDim - stock.diameter) < 0.1) {
+            bestMatch = stock;
+            break;
+          } else if (stock.diameter_max && maxDim < stock.diameter_max) {
+            bestMatch = stock;
+          } else if (stock.diameter_min && maxDim > stock.diameter_min) {
+            bestMatch = stock;
+          } else if (stock.hex_size) {
+            // ThunderHex matching
+            if (Math.abs(maxDim - stock.hex_size) < 0.1 && midDim < stock.length_max) {
+              bestMatch = stock;
+              break;
+            }
+          }
+        } else if (workflow === 'router') {
+          // Match tube stock
+          if (stock.outer_width && stock.outer_height) {
+            if ((Math.abs(dimX - stock.outer_width) < 0.1 && Math.abs(dimY - stock.outer_height) < 0.1) ||
+                (Math.abs(dimX - stock.outer_height) < 0.1 && Math.abs(dimY - stock.outer_width) < 0.1)) {
+              bestMatch = stock;
+              break;
+            }
+          }
+        } else {
+          // Default material match for mill and 3d-print
+          bestMatch = stock;
+          break;
         }
       }
     }
     
-    return parts;
+    // Fallback to first material match if no exact match
+    if (!bestMatch) {
+      bestMatch = workflowStocks.find(stock => 
+        material.includes(stock.material.toLowerCase())
+      );
+    }
+    
+    if (bestMatch) {
+      part.stock_assignment = bestMatch.description;
+    }
   }
 
   async function confirmBuild() {
@@ -496,28 +575,9 @@
       alert('Error checking for duplicate parts');
     }
   }
-
   async function buildDuplicate() {
     const manufacturedItems = buildBOM.filter(item => item.part_type === 'manufactured');
     alert(`Would add all ${manufacturedItems.length} manufactured parts to parts list`);
-  }
-
-  async function testChatGPTConnection() {
-    try {
-      const response = await fetch('/api/chatgpt', {
-        method: 'GET'
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        alert('✅ ChatGPT API connection successful! Your OpenAI API key is working correctly.');
-      } else {
-        alert('❌ ChatGPT API connection failed: ' + (data.error || 'Unknown error'));
-      }
-    } catch (error) {
-      alert('❌ Error testing ChatGPT connection: ' + error.message);
-    }
   }
 
   // Debug function to test BOM data extraction
@@ -550,6 +610,96 @@
         }
       });
       console.log('Workflow distribution:', workflowCounts);
+    }
+  }
+  
+  // Function to update part type (COTS vs Manufactured)
+  function updatePartType(index, newType) {
+    if (buildBOM[index]) {
+      buildBOM[index].part_type = newType;
+        // Automatically update workflow when changing to COTS
+      if (newType === 'COTS') {
+        buildBOM[index].workflow = 'purchase';
+        buildBOM[index].manufacturing_process = null;
+      } else {
+        // If changing to manufactured, set default workflow
+        buildBOM[index].workflow = buildBOM[index].manufacturing_process || 'mill';
+      }
+      
+      // Auto-assign stock based on part dimensions and workflow
+      autoAssignStock(index);
+      
+      // Force reactivity
+      buildBOM = [...buildBOM];
+    }
+  }
+  
+  // Function to update workflow/manufacturing process
+  function updateWorkflow(index, newWorkflow) {
+    if (buildBOM[index]) {
+      buildBOM[index].workflow = newWorkflow;      buildBOM[index].manufacturing_process = newWorkflow === 'purchase' ? null : newWorkflow;
+      
+      // Auto-assign stock when workflow changes
+      autoAssignStock(index);
+      
+      // Force reactivity
+      buildBOM = [...buildBOM];
+    }
+  }
+  
+  // Get all available stocks for a workflow
+  function getStocksForWorkflow(workflow) {
+    return stockData[workflow] || [];
+  }
+  // Add a single item to build and build_bom immediately
+  async function addSingleToBuild(item) {
+    loadingBuild = true;
+    try {
+      // Create a new build for this item (or you could group by session/user if needed)
+      const buildHash = `${subsystem.onshape_document_id}_${selectedVersion?.id || 'manual'}_${item.part_number || item.part_name}_${Date.now()}`;
+      const { data: build, error } = await supabase
+        .from('builds')
+        .insert([{
+          subsystem_id: subsystem.id,
+          release_id: selectedVersion?.id || null,
+          release_name: selectedVersion?.name || 'Manual Add',
+          build_hash: buildHash,
+          created_by: user.id,
+          status: 'pending'
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Determine file_url for router and 3d-print workflows
+      let file_url = null;
+      const workflow = item.workflow || item.manufacturing_process;
+      // Prefer part-specific elementId if available, fallback to subsystem.onshape_element_id
+      const elementId = item.element_id || item.onshape_element_id || subsystem.onshape_element_id;
+      const partId = item.onshape_part_id || item.part_id;
+      const wvm = selectedVersion ? 'v' : 'w';
+      const wvmid = selectedVersion ? selectedVersion.id : subsystem.onshape_workspace_id;
+      if (workflow === 'router' && partId && elementId) {
+        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/parasolid`;
+      } else if (workflow === '3d-print' && partId && elementId) {
+        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/stl`;
+      }
+
+      // Insert the single BOM item, including file_url if present
+      const bomItem = { ...item, build_id: build.id, file_url };
+      const { error: bomError } = await supabase
+        .from('build_bom')
+        .insert([bomItem]);
+
+      if (bomError) throw bomError;
+
+      alert('Build created for this item!');
+    } catch (error) {
+      console.error('Error creating build for item:', error);
+      alert('Failed to create build for this item: ' + error.message);
+    } finally {
+      loadingBuild = false;
     }
   }
 </script>
@@ -650,17 +800,9 @@
               <button class="btn btn-primary" on:click={manufactureIteration}>
                 <Zap size={16} />
                 Manufacture Iteration
-              </button>
-              <button class="btn btn-secondary" on:click={buildDuplicate}>
+              </button>              <button class="btn btn-secondary" on:click={buildDuplicate}>
                 <Copy size={16} />
                 Build Duplicate
-              </button>
-              <button class="btn btn-outline" on:click={testChatGPTConnection}>
-                <Settings size={16} />
-                Test AI Connection
-              </button>
-              <button class="btn btn-outline" on:click={debugBOMStructure}>
-                🐛 Debug BOM
               </button>
             </div><div class="bom-table-container">
               <table class="bom-table">
@@ -689,22 +831,36 @@
                         </div>
                       </td>
                       <td>{item.part_number || '-'}</td>
-                      <td>{item.quantity}</td>
-                      <td>
-                        <span class="type-badge type-{item.part_type.toLowerCase()}">
-                          {item.part_type}
-                        </span>
-                      </td>
-                      <td>{item.material || '-'}</td>
-                      <td>
-                        {#if item.workflow}
-                          <span class="workflow-badge workflow-{item.workflow.replace('-', '')}">
-                            {item.workflow}
+                      <td>{item.quantity}</td>                      <td>
+                        <select
+                          class="workflow-dropdown {item.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}"
+                          value={item.part_type}
+                          on:change={(e) => updatePartType(index, e.target.value)}
+                          style="background: {item.part_type === 'COTS' ? '#fff8e1' : '#e1f5fe'}; color: {item.part_type === 'COTS' ? '#f57f17' : '#0277bd'}; border: 1px solid {item.part_type === 'COTS' ? '#ffcc02' : '#81d4fa'}"
+                        >
+                          <option value="COTS" class="type-cots">COTS</option>
+                          <option value="manufactured" class="type-manufactured">Manufactured</option>
+                        </select>
+                      </td>                      <td>
+                        {#if item.part_type === 'COTS'}
+                          <span class="workflow-badge workflow-purchase">
+                            Purchase
                           </span>
                         {:else}
-                          -
+                          <select 
+                            class="workflow-dropdown workflow-{item.workflow || item.manufacturing_process || 'mill'}" 
+                            value={item.workflow || item.manufacturing_process || 'mill'} 
+                            on:change={(e) => updateWorkflow(index, e.target.value)}
+                          >
+                            <option value="3d-print">3D Print</option>
+                            <option value="laser-cut">Laser Cut</option>
+                            <option value="lathe">Lathe</option>
+                            <option value="mill">Mill</option>
+                            <option value="router">Router</option>
+                          </select>
                         {/if}
-                      </td>                      <td>
+                      </td>
+                      <td>{item.material || '-'}</td><td>
                         {#if item.bounding_box_x && item.bounding_box_y && item.bounding_box_z}
                           <div class="bounding-box">
                             {(item.bounding_box_x * 1000).toFixed(1)} × {(item.bounding_box_y * 1000).toFixed(1)} × {(item.bounding_box_z * 1000).toFixed(1)} mm
@@ -713,18 +869,17 @@
                           <span class="no-data">No dimensions</span>
                         {/if}
                       </td>
-                      <td>
-                        <select bind:value={item.stock_assignment}>
+                      <td>                        <select bind:value={item.stock_assignment}>
                           <option value="">Select Stock</option>
-                          {#each stockTypes as stock}
-                            <option value="{stock.material} - {stock.stock_type}">
-                              {stock.material} - {stock.stock_type}
+                          {#each getStocksForWorkflow(item.workflow || 'mill') as stock}
+                            <option value={stock.description}>
+                              {stock.description}
                             </option>
                           {/each}
                         </select>
                       </td>
                       <td>
-                        <button class="btn btn-sm btn-outline">
+                        <button class="btn btn-sm btn-outline" on:click={() => addSingleToBuild(item)}>
                           <Plus size={14} />
                           Add
                         </button>
@@ -735,23 +890,7 @@
               </table>
             </div>
 
-            <div class="modal-actions">
-              <button class="btn btn-secondary" on:click={() => showBuildModal = false}>
-                Cancel
-              </button>
-              <button 
-                class="btn btn-primary" 
-                on:click={confirmBuild}
-                disabled={loadingBuild}
-              >
-                {#if loadingBuild}
-                  <div class="spinner-small"></div>
-                {:else}
-                  <Settings size={16} />
-                {/if}
-                Create Build
-              </button>
-            </div>
+            <!-- Removed modal-actions and Create Build button as per requirements -->
           {/if}
         </div>
       </div>
@@ -1038,11 +1177,69 @@
     color: #7b1fa2;
     border: 1px solid #ce93d8;
   }
-  
   .workflow-router {
     background: #e8f5e8;
     color: #388e3c;
     border: 1px solid #a5d6a7;
+  }
+  
+  .workflow-purchase {
+    background: #e8f5e8;
+    color: #2e7d32;
+    border: 1px solid #4caf50;
+  }
+  
+  .workflow-lathe {
+    background: #fce4ec;
+    color: #c2185b;
+    border: 1px solid #f48fb1;
+  }
+  
+  /* Color-coded dropdown styles */
+  .workflow-dropdown {
+    padding: 0.375rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    border: 1px solid;
+    background: var(--surface);
+  }
+  
+  .workflow-dropdown.workflow-mill {
+    background: #e3f2fd;
+    color: #1976d2;
+    border-color: #bbdefb;
+  }
+  
+  .workflow-dropdown.workflow-laser-cut {
+    background: #fff3e0;
+    color: #f57c00;
+    border-color: #ffcc02;
+  }
+  
+  .workflow-dropdown.workflow-3d-print {
+    background: #f3e5f5;
+    color: #7b1fa2;
+    border-color: #ce93d8;
+  }
+  
+  .workflow-dropdown.workflow-router {
+    background: #e8f5e8;
+    color: #388e3c;
+    border-color: #a5d6a7;
+  }
+  
+  .workflow-dropdown.workflow-lathe {
+    background: #fce4ec;
+    color: #c2185b;
+    border-color: #f48fb1;
+  }
+  
+  .workflow-dropdown.workflow-purchase {
+    background: #e8f5e8;
+    color: #2e7d32;
+    border-color: #4caf50;
   }
   
   .type-badge {
@@ -1179,6 +1376,22 @@
     background: var(--surface);
     color: var(--text);
     font-size: 0.875rem;
+  }
+
+  .workflow-dropdown {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.75rem;
+    min-width: 100px;
+  }
+  
+  .workflow-dropdown:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
   }
 
   .no-data {

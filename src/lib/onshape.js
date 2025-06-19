@@ -1,5 +1,5 @@
 import { PUBLIC_ONSHAPE_ACCESS_KEY, PUBLIC_ONSHAPE_SECRET_KEY, PUBLIC_ONSHAPE_BASE_URL } from '$env/static/public';
-import { chatGPTService } from './chatgpt.js';
+import { partClassificationService } from './chatgpt.js';
 
 class OnShapeAPI {
     constructor() {
@@ -165,9 +165,10 @@ class OnShapeAPI {
     async getPartProperties(documentId, workspaceId, elementId, partId) {
         console.warn('Part properties endpoint not available in current OnShape API structure. Using empty object.');
         return {};
-    }    // Analyze BOM and categorize parts using ChatGPT
+    }    // Analyze BOM and categorize parts using manual classification rules
     async analyzeBOM(bom, workspaceId = null) {
-        const analyzedParts = [];
+        try {
+            const analyzedParts = [];
         
         // BOM data structure:
         // - headers: array of {id, name, propertyName, valueType}
@@ -232,7 +233,7 @@ class OnShapeAPI {
         console.log('BOM Document ID:', bom.bomSource?.document?.id);
         console.log('Final resolved workspace ID:', resolvedWorkspaceId);
         
-        // Prepare data for ChatGPT analysis
+        // Prepare data for manual classification analysis
         const bomDataForAI = [];
         
         for (const item of bomItems) {
@@ -396,17 +397,21 @@ class OnShapeAPI {
             }
         }
         
-        console.log('BOM data prepared for AI:', bomDataForAI);
-        
-        // Use ChatGPT to classify parts - pass bounding box data too
+        console.log('BOM data prepared for AI:', bomDataForAI);        
+        // Use manual classification rules
         let classifications = [];
         try {
-            console.log('Sending BOM data to ChatGPT for classification...');
-            classifications = await chatGPTService.classifyParts(bomDataForAI);
-            console.log('ChatGPT classifications received:', classifications);
-        } catch (aiError) {
-            console.warn('ChatGPT classification failed, using fallback method:', aiError);
-            classifications = chatGPTService.fallbackClassification(bomDataForAI);
+            console.log('Classifying BOM data using manual rules...');
+            classifications = await partClassificationService.classifyParts(bomDataForAI);
+            console.log('Manual classifications completed:', classifications);
+        } catch (classificationError) {
+            console.error('Manual classification failed:', classificationError);
+            // Fallback to basic classification
+            classifications = bomDataForAI.map(item => ({
+                part_name: item.name || item.part_name || 'Unknown',
+                classification: 'COTS',
+                manufacturing_process: null
+            }));
         }
         
         // Combine BOM data with AI classifications
@@ -436,11 +441,13 @@ class OnShapeAPI {
                 status: 'pending',
                 vendor: bomItem.vendor,
                 description: bomItem.description
-            });
-        }
-        
-        console.log('Final analyzed parts:', analyzedParts);
+            });        }
+          console.log('Final analyzed parts:', analyzedParts);
+        console.log('About to return analyzedParts, length:', analyzedParts.length);
         return analyzedParts;
+        } catch (error) {
+            console.error('Error in analyzeBOM:', error);            throw error;
+        }
     }
 
     // Auto-assign stock based on part properties and available stock

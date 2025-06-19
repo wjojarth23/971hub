@@ -34,11 +34,15 @@
         .from('user_profiles')
         .upsert({
           id: authUser.id,
-          display_name: authUser.user_metadata?.display_name || authUser.user_metadata?.full_name || authUser.email.split('@')[0],
-          full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.display_name || '',
+          full_name: authUser.user_metadata?.full_name
+            || (typeof authUser.user_metadata?.display_name === 'string'
+                ? authUser.user_metadata.display_name.split(' ')[0]
+                : authUser.email.split('@')[0]),
           email: authUser.email,
           role: authUser.user_metadata?.role || 'member',
-          permissions: authUser.user_metadata?.permissions || 'basic'
+          permissions: Array.isArray(authUser.user_metadata?.permissions)
+            ? authUser.user_metadata.permissions.map(String)
+            : [String(authUser.user_metadata?.permissions || 'basic')]
         }, {
           onConflict: 'id'
         });

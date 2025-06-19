@@ -1,143 +1,189 @@
 /**
- * ChatGPT Service for Part Classification and Tool Assignment
- * Uses server-side API route to securely call OpenAI's GPT-4-mini API
+ * Manual Part Classification Service
+ * Implements rule-based classification for COTS vs Manufactured parts
+ * and assigns manufacturing processes based on defined criteria
  */
 
-class ChatGPTService {
+class PartClassificationService {
     constructor() {
-        this.apiRoute = '/api/chatgpt';
+        // No API route needed for manual classification
     }
 
     /**
-     * Classify parts using ChatGPT API via server-side route
+     * Classify parts using manual rules
      * @param {Array} bomData - Array of BOM items with columns: Bounding Box, Name, Description, Vendor, Material, Part Number
      * @returns {Promise<Array>} - Array of classified parts
      */
     async classifyParts(bomData) {
         try {
-            const response = await fetch(this.apiRoute, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    bomData: bomData
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(`Server error: ${response.status} - ${errorData.error || 'Unknown error'}`);
-            }
-
-            const data = await response.json();
-            
-            if (!data.success) {
-                throw new Error(data.error || 'Classification failed');
-            }
-
-            return data.classifications;
-
+            return this.manualClassification(bomData);
         } catch (error) {
-            console.error('ChatGPT classification error:', error);
+            console.error('Part classification error:', error);
             throw error;
         }
     }
 
     /**
-     * Fallback classification using simple heuristics
-     * Used when ChatGPT API is not available
+     * Manual classification using defined rules
      */
-    fallbackClassification(bomData) {
-        return bomData.map(item => {
+    manualClassification(bomData) {        return bomData.map(item => {
             const name = (item.name || item.part_name || '').toLowerCase();
-            const description = (item.description || '').toLowerCase();
-            const partNumber = (item.part_number || item.partNumber || '').toLowerCase();
+            const description = (item.description || '').toLowerCase();  
+            const partNumber = (item.part_number || item.partNumber || '');
             const material = (item.material || '').toLowerCase();
-            const vendor = (item.vendor || '').toLowerCase();            // COTS identification patterns
-            const cotsPatterns = [
-                'screw', 'bolt', 'nut', 'washer', 'bearing', 'motor', 'sensor',
-                'switch', 'led', 'resistor', 'capacitor', 'arduino', 'raspberry',
-                'servo', 'stepper', 'encoder', 'spring', 'gasket', 'o-ring',
-                'cable', 'wire', 'connector', 'button', 'battery', 'fuse',
-                'gear', 'belt', 'pulley', 'wheel'
-            ];
+            const vendor = (item.vendor || '').toLowerCase();
+            const standardContent = (item.standard_content || item.standardContent || false);
 
-            // Check for COTS indicators
-            const isCOTS = cotsPatterns.some(pattern => 
-                name.includes(pattern) || description.includes(pattern)
-            ) || vendor !== '' || /^[0-9A-Z-]+$/.test(partNumber) || name.match(/^\d+$/); // Just numbers as names are often COTSlet manufacturingProcess = null;
-            if (!isCOTS) {
-                // Determine manufacturing process based on material and size
+            // COTS Classification Rules
+            let isCOTS = false;
+            
+            // Rule 1: Material contains Belt, Acetal, or Delrin
+            if (material.includes('belt') || material.includes('acetal') || material.includes('delrin')) {
+                isCOTS = true;
+            }
+            
+            // Rule 2: Name contains WCP
+            if (name.includes('wcp')) {
+                isCOTS = true;
+            }
+            
+            // Rule 3: Part has a vendor
+            if (vendor && vendor.trim() !== '') {
+                isCOTS = true;
+            }
+            
+            // Rule 4: Marked as standard content in BOM response
+            if (standardContent === true || standardContent === 'true') {
+                isCOTS = true;
+            }
+
+            let manufacturingProcess = null;
+            
+            // Only classify as manufactured if part number begins with capital "P"
+            if (!isCOTS && partNumber.startsWith('P')) {
+                // Get dimensions for classification
                 const boundingBoxX = item.bounding_box_x || 0;
                 const boundingBoxY = item.bounding_box_y || 0;
                 const boundingBoxZ = item.bounding_box_z || 0;
-                const minDimension = Math.min(boundingBoxX, boundingBoxY, boundingBoxZ);
-                const maxDimension = Math.max(boundingBoxX, boundingBoxY, boundingBoxZ);
-
-                // If we have bounding box data, use it for better classification
-                if (boundingBoxX > 0 && boundingBoxY > 0 && boundingBoxZ > 0) {
-                    // Convert from meters to mm for analysis
-                    const minMM = minDimension * 1000;
-                    const maxMM = maxDimension * 1000;
+                
+                // Convert dimensions to inches if they're in meters
+                let dimX = boundingBoxX > 1 ? boundingBoxX / 1000 * 39.3701 : boundingBoxX * 39.3701;
+                let dimY = boundingBoxY > 1 ? boundingBoxY / 1000 * 39.3701 : boundingBoxY * 39.3701;
+                let dimZ = boundingBoxZ > 1 ? boundingBoxZ / 1000 * 39.3701 : boundingBoxZ * 39.3701;
+                
+                // Sort dimensions to get min/max
+                const dimensions = [dimX, dimY, dimZ].sort((a, b) => a - b);
+                const minDim = dimensions[0];
+                const maxDim = dimensions[2];                // Immediate assignment for 3D printing materials
+                if (material.includes('nylon') || material.includes('pla') || 
+                    material.includes('abs') || material.includes('petg') || 
+                    material.includes('onyx')) {
+                    manufacturingProcess = '3d-print';
+                }else {
+                    // Classify by geometry using heuristics
+                    const isSheet = this.isSheetGeometry(dimensions, material);
+                    const isShaft = this.isShaftGeometry(dimensions);
+                    const isCubic = this.isCubicGeometry(dimensions);
                     
-                    if (material.includes('aluminum') || material.includes('steel') || material.includes('brass')) {
+                    console.log(`Part "${name}" geometry analysis: sheet=${isSheet}, shaft=${isShaft}, cubic=${isCubic}, dims=[${dimensions[0].toFixed(2)}, ${dimensions[1].toFixed(2)}, ${dimensions[2].toFixed(2)}]`);
+                    
+                    if (isSheet) {
+                        // Sheet goods classification
+                        if (material.includes('acrylic') || material.includes('poly') || 
+                            material.includes('wood') || material.includes('birch')) {
+                            manufacturingProcess = 'laser-cut';
+                        } else {
+                            manufacturingProcess = 'router';
+                        }
+                    } else if (isShaft) {
+                        manufacturingProcess = 'lathe';
+                    } else if (isCubic) {
                         manufacturingProcess = 'mill';
-                    } else if (material.includes('wood') || material.includes('mdf') || material.includes('plywood')) {
-                        manufacturingProcess = minMM < 20 ? 'laser-cut' : 'router';
-                    } else if (material.includes('acrylic') || (material.includes('plastic') && minMM < 10)) {
-                        manufacturingProcess = 'laser-cut';
-                    } else if (material.includes('plastic') || material.includes('pla') || material.includes('abs') || material.includes('nylon')) {
-                        manufacturingProcess = '3d-print';
-                    } else if (maxMM > 200) {
-                        manufacturingProcess = 'router';
                     } else {
-                        manufacturingProcess = 'mill'; // default
+                        // Default classification based on material
+                        if (material.includes('acrylic') || material.includes('poly') || 
+                            material.includes('wood') || material.includes('birch')) {
+                            manufacturingProcess = 'laser-cut';
+                        } else {
+                            manufacturingProcess = 'mill';
+                        }
                     }
-                } else {
-                    // No bounding box data, classify based on material only
-                    if (material.includes('aluminum') || material.includes('steel') || material.includes('brass')) {
-                        manufacturingProcess = 'mill';
-                    } else if (material.includes('wood') || material.includes('mdf') || material.includes('plywood')) {
-                        manufacturingProcess = 'laser-cut'; // assume thin sheet                    } else if (material.includes('acrylic')) {
-                        manufacturingProcess = 'laser-cut';
-                    } else if (material.includes('plastic') || material.includes('pla') || material.includes('abs') || 
-                               material.includes('nylon') || material.includes('petg') || material.includes('glass-filled')) {
-                        manufacturingProcess = '3d-print';
-                    } else {
-                        manufacturingProcess = 'mill'; // default when unsure
-                    }                }
-            }
-
-            return {
+                }
+            } else if (!isCOTS) {
+                // Not COTS but doesn't start with "P" - cannot be manufactured
+                isCOTS = true; // Force to COTS since it doesn't meet manufactured criteria
+            }            return {
                 part_name: item.name || item.part_name || 'Unknown',
                 classification: isCOTS ? 'COTS' : 'manufactured',
-                manufacturing_process: manufacturingProcess
+                manufacturing_process: manufacturingProcess,
+                workflow_status: isCOTS ? 'purchase' : manufacturingProcess
             };
         });
     }
 
     /**
-     * Test the API connection
+     * Determine if part has sheet geometry
+     */
+    isSheetGeometry(dimensions, material) {
+        const [minDim, midDim, maxDim] = dimensions;
+        
+        // Sheet goods: one dimension is significantly smaller than the others
+        const aspectRatio = maxDim / minDim;
+        const isThick = minDim > 0.25; // More than 1/4 inch thick
+        
+        // Acrylic or materials with "poly" are automatically sheet goods
+        if (material.includes('acrylic') || material.includes('poly')) {
+            return true;
+        }
+        
+        // Wood/Birch sheet goods
+        if (material.includes('wood') || material.includes('birch')) {
+            return true;
+        }
+        
+        // Geometric heuristic: high aspect ratio and thin
+        return aspectRatio > 4 && !isThick;
+    }    /**
+     * Determine if part has shaft geometry
+     */
+    isShaftGeometry(dimensions) {
+        const [minDim, midDim, maxDim] = dimensions;
+        
+        // Shaft: one dimension much longer than the other two
+        // More relaxed criteria for shaft detection
+        const lengthRatio = maxDim / midDim;
+        const crossSectionRatio = midDim / minDim;
+        
+        // A shaft is long and relatively thin
+        // Length should be at least 2x the next dimension
+        // Cross-section should be relatively round/square (not too flat)
+        const isLongAndThin = lengthRatio >= 2;
+        const hasReasonableCrossSection = crossSectionRatio <= 3;
+        
+        console.log(`Shaft check for dims [${minDim.toFixed(2)}, ${midDim.toFixed(2)}, ${maxDim.toFixed(2)}]: lengthRatio=${lengthRatio.toFixed(2)}, crossSectionRatio=${crossSectionRatio.toFixed(2)}, isShaft=${isLongAndThin && hasReasonableCrossSection}`);
+        
+        return isLongAndThin && hasReasonableCrossSection;
+    }
+
+    /**
+     * Determine if part has cubic geometry
+     */
+    isCubicGeometry(dimensions) {
+        const [minDim, midDim, maxDim] = dimensions;
+        
+        // Cubic: every dimension exceeds 0.5" and it's not sheet
+        const allDimensionsLarge = minDim > 0.5 && midDim > 0.5 && maxDim > 0.5;
+        const isSheet = this.isSheetGeometry(dimensions, '');
+        
+        return allDimensionsLarge && !isSheet;
+    }
+
+    /**
+     * Test method - no longer needed but kept for compatibility
      */
     async testConnection() {
-        try {
-            const response = await fetch(this.apiRoute, {
-                method: 'GET'
-            });
-
-            if (!response.ok) {
-                return false;
-            }
-
-            const data = await response.json();
-            return data.success;
-
-        } catch (error) {
-            console.error('API connection test failed:', error);
-            return false;
-        }
+        return true; // Always return true since we don't need external API
     }
 }
 
-export const chatGPTService = new ChatGPTService();
+export const partClassificationService = new PartClassificationService();

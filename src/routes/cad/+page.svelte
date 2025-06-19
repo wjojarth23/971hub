@@ -36,12 +36,12 @@
     // Get user profile
     userStore.subscribe(value => {
       user = value;
-      loading = false;
     });
 
     await loadSubsystems();
     await loadBuilds();
     await loadStockTypes();
+    loading = false; // Set loading to false only after all data is loaded
   });
 
   async function ensureUserProfile(authUser) {
@@ -49,10 +49,20 @@
       const { data, error } = await supabase        .from('user_profiles')
         .upsert({
           id: authUser.id,
-          full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.display_name || '',
+          full_name: (
+            authUser.user_metadata?.full_name
+              ? authUser.user_metadata.full_name
+              : (
+                  typeof authUser.user_metadata?.display_name === 'string'
+                    ? authUser.user_metadata.display_name.split(' ')[0]
+                    : ''
+                )
+          ),
           email: authUser.email,
           role: authUser.user_metadata?.role || 'member',
-          permissions: authUser.user_metadata?.permissions || 'basic'
+          permissions: Array.isArray(authUser.user_metadata?.permissions)
+            ? authUser.user_metadata.permissions.map(String)
+            : [String(authUser.user_metadata?.permissions || 'basic')]
         }, {
           onConflict: 'id'
         });
