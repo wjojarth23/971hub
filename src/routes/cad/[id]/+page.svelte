@@ -19,23 +19,40 @@
   let stockTypes = [];
   let loadingBOM = false;
   let loadingBuild = false;
-
   onMount(async () => {
-    // Check authentication
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
+    try {
+      // Check authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        goto('/');
+        return;
+      }
+
+      // Get user profile first
+      const { data: userProfile, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
+
+      if (userError) {
+        console.error('Error loading user profile:', userError);
+      } else {
+        userStore.set(userProfile);
+      }
+
+      // Subscribe to user store updates
+      userStore.subscribe(value => {
+        user = value;
+      });
+
+      await loadSubsystem();
+      await loadStockTypes();
+    } catch (error) {
+      console.error('Error in onMount:', error);
       goto('/');
-      return;
     }
-
-    userStore.subscribe(value => {
-      user = value;
-    });
-
-    await loadSubsystem();
-    await loadStockTypes();
   });
-
   async function loadSubsystem() {
     try {
       const { data, error } = await supabase
@@ -48,19 +65,31 @@
         .single();
 
       if (error) throw error;
-      subsystem = data;      if (subsystem.onshape_document_id) {
+      subsystem = data;
+      
+      // Additional logging for debugging membership issues
+      console.log('Loaded subsystem:', {
+        id: subsystem.id,
+        name: subsystem.name,
+        members: subsystem.subsystem_members,
+        currentUser: user?.id
+      });
+
+      if (subsystem.onshape_document_id) {
         console.log('Loading timeline for OnShape document:', subsystem.onshape_document_id);
         await loadTimeline();
       } else {
         console.log('No OnShape document linked to this subsystem');
       }
-    } catch (error) {
-      console.error('Error loading subsystem:', error);
-      goto('/cad');
+    } catch (error) {      console.error('Error loading subsystem:', error);
+      // Don't redirect immediately on error, give user chance to see what's happening
+      alert('Failed to load subsystem: ' + error.message);
     } finally {
       loading = false;
     }
-  }  async function loadTimeline() {
+  }
+
+  async function loadTimeline() {
     try {
       // Get document versions
       const allVersions = await onShapeAPI.getDocumentVersions(subsystem.onshape_document_id);
@@ -144,17 +173,26 @@
     } finally {
       loadingBOM = false;
     }
-  }
-  function isSubsystemMember() {
-    const isMember = subsystem?.subsystem_members?.some(member => member.user_id === user?.id);
+  }  function isSubsystemMember() {
+    // Add null/undefined checks
+    if (!subsystem || !user || !subsystem.subsystem_members) {
+      console.log('Missing data for membership check:', {
+        hasSubsystem: !!subsystem,
+        hasUser: !!user,
+        hasMembers: !!subsystem?.subsystem_members
+      });
+      return false;
+    }
+    
+    const isMember = subsystem.subsystem_members.some(member => member.user_id === user.id);
     console.log('Checking subsystem membership:', {
-      subsystem: subsystem?.name,
-      user: user?.id,
-      members: subsystem?.subsystem_members,
+      subsystem: subsystem.name,
+      user: user.id,
+      members: subsystem.subsystem_members,
       isMember
     });
     return isMember;
-  }  async function analyzeBOM(bom) {
+  }async function analyzeBOM(bom) {
     console.log('Analyzing BOM with manual classification rules...');
     
     try {
@@ -702,6 +740,34 @@
       loadingBuild = false;
     }
   }
+
+  async function joinSubsystem() {
+    if (!user || !subsystem) return;
+    
+    try {
+      const { error } = await supabase
+        .from('subsystem_members')
+        .insert({
+          subsystem_id: subsystem.id,
+          user_id: user.id
+        });
+
+      if (error) {
+        if (error.code === '23505') { // unique_violation
+          alert('You are already a member of this subsystem');
+        } else {
+          throw error;
+        }
+      } else {
+        alert('Successfully joined subsystem!');
+        // Reload subsystem data to update membership
+        await loadSubsystem();
+      }
+    } catch (error) {
+      console.error('Error joining subsystem:', error);
+      alert('Failed to join subsystem: ' + error.message);
+    }
+  }
 </script>
 
 <svelte:head>
@@ -732,8 +798,7 @@
       <section class="timeline-section">
         <h2>OnShape Timeline</h2>
         <div class="timeline-container">
-          <div class="timeline">
-            {#each timeline as item}
+          <div class="timeline">            {#each timeline as item}
               <div class="timeline-item" class:release={item.type === 'release'}>
                 <div class="timeline-marker">
                   {#if item.type === 'release'}
@@ -749,8 +814,7 @@
                   </div>
                   {#if item.description}
                     <p class="timeline-description">{item.description}</p>
-                  {/if}
-                  {#if isSubsystemMember()}
+                  {/if}                  {#if isSubsystemMember()}
                     <button 
                       class="btn btn-primary btn-sm"
                       on:click={() => createBuildFromRelease(item)}
@@ -759,13 +823,33 @@
                       Create Build
                     </button>
                   {:else}
-                    <!-- Debug: Show why button is not visible -->
-                    <p style="color: red; font-size: 12px;">Not a member or timeline empty. Timeline length: {timeline.length}</p>
+                    <!-- Show join button if user is loaded but not a member -->
+                    {#if user && subsystem}
+                      <button 
+                        class="btn btn-secondary btn-sm"
+                        on:click={joinSubsystem}
+                        title="Join this subsystem to create builds"
+                      >
+                        <Plus size={14} />
+                        Join to Create Builds
+                      </button>
+                    {:else if !user}
+                      <p style="color: #666; font-size: 11px; font-style: italic;">
+                        Please log in to create builds
+                      </p>
+                    {/if}
                   {/if}
                 </div>
               </div>
             {:else}
-              <p>No timeline items found. Timeline data: {JSON.stringify(timeline)}</p>
+              <div class="empty-timeline">
+                <p>No timeline items available.</p>
+                {#if !loading}
+                  <p style="font-size: 12px; color: #666;">
+                    Failed to load timeline from OnShape. Please try refreshing the page.
+                  </p>
+                {/if}
+              </div>
             {/each}
           </div>
         </div>
@@ -1398,5 +1482,15 @@
     color: var(--secondary);
     font-style: italic;
     font-size: 0.75rem;
+  }
+
+  .empty-timeline {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-muted);
+  }
+
+  .empty-timeline p {
+    margin: 0.5rem 0;
   }
 </style>
