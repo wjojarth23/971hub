@@ -18,11 +18,13 @@
   let buildBOM = [];
   let stockTypes = [];
   let loadingBOM = false;
-  let loadingBuild = false;
+  let loadingBuild = false;  let loadingStep = 'Initializing...';
+  
   // Track which parts have been added to the parts table
   let addedPartsSet = new Set();
   onMount(async () => {
     try {
+      loadingStep = 'Checking authentication...';
       // Check authentication
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
@@ -30,6 +32,7 @@
         return;
       }
 
+      loadingStep = 'Loading user profile...';
       // Get user profile first
       const { data: userProfile, error: userError } = await supabase
         .from('users')
@@ -48,15 +51,18 @@
         user = value;
       });
 
+      loadingStep = 'Loading subsystem data...';
       await loadSubsystem();
       await loadStockTypes();
     } catch (error) {
       console.error('Error in onMount:', error);
       goto('/');
     }
-  });
-  async function loadSubsystem() {
+  });  async function loadSubsystem() {
     try {
+      console.log('Loading subsystem with ID:', subsystemId);
+      loadingStep = 'Loading subsystem details...';
+      
       const { data, error } = await supabase
         .from('subsystems')
         .select(`
@@ -79,7 +85,20 @@
 
       if (subsystem.onshape_document_id) {
         console.log('Loading timeline for OnShape document:', subsystem.onshape_document_id);
-        await loadTimeline();
+        loadingStep = 'Loading OnShape timeline...';
+        // Add timeout wrapper for timeline loading
+        try {
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeline loading timeout')), 45000)
+          );
+          
+          await Promise.race([loadTimeline(), timeoutPromise]);
+        } catch (timelineError) {
+          console.error('Timeline loading failed or timed out:', timelineError);
+          // Continue loading the page even if timeline fails
+          timeline = [];
+          loadingStep = 'Timeline loading failed, continuing...';
+        }
       } else {
         console.log('No OnShape document linked to this subsystem');
       }
@@ -87,15 +106,32 @@
       // Don't redirect immediately on error, give user chance to see what's happening
       alert('Failed to load subsystem: ' + error.message);
     } finally {
+      // Ensure loading is always set to false
       loading = false;
+      console.log('Loading state set to false');
     }
   }
-
   async function loadTimeline() {
     try {
-      // Get document versions
-      const allVersions = await onShapeAPI.getDocumentVersions(subsystem.onshape_document_id);
+      console.log('Starting timeline load for document:', subsystem.onshape_document_id);
+      
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeline loading timeout after 30 seconds')), 30000)
+      );
+      
+      const versionsPromise = onShapeAPI.getDocumentVersions(subsystem.onshape_document_id);
+      
+      // Race between the API call and timeout
+      const allVersions = await Promise.race([versionsPromise, timeoutPromise]);
       console.log('OnShape all versions response:', allVersions);
+      
+      // Validate response
+      if (!Array.isArray(allVersions)) {
+        console.warn('Invalid versions response, setting empty timeline');
+        timeline = [];
+        return;
+      }
       
       // Take the last 15 versions (newest first)
       // Sort by creation date descending and take first 15
@@ -115,6 +151,10 @@
       console.log('Final timeline items:', timeline);
     } catch (error) {
       console.error('Error loading timeline:', error);
+      // Show user-friendly message for timeouts
+      if (error.message.includes('timeout')) {
+        console.warn('Timeline loading timed out - OnShape API may be slow');
+      }
       timeline = [];
     }
   }
@@ -829,7 +869,8 @@
 {#if loading}
   <div class="loading-container">
     <div class="loading-spinner"></div>
-    <p>Loading subsystem...</p>
+    <p>{loadingStep}</p>
+    <small>If this takes more than 30 seconds, there may be an issue with the OnShape API.</small>
   </div>
 {:else if subsystem}
   <main class="main-content">

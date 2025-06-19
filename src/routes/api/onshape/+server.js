@@ -64,10 +64,16 @@ export async function GET({ url }) {
                 break;
             default:
                 return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box' }, { status: 400 });
-        }const response = await fetch(`${ONSHAPE_BASE_URL}${apiPath}`, {
+        }        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+        const response = await fetch(`${ONSHAPE_BASE_URL}${apiPath}`, {
             method: 'GET',
-            headers: getAuthHeaders()
+            headers: getAuthHeaders(),
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -78,10 +84,13 @@ export async function GET({ url }) {
         }
 
         const data = await response.json();
-        return json(data);
-
-    } catch (error) {
+        return json(data);    } catch (error) {
         console.error('Error calling OnShape API:', error);
-        return json({ error: 'Internal server error' }, { status: 500 });
+        
+        if (error.name === 'AbortError') {
+            return json({ error: 'OnShape API timeout - request took too long' }, { status: 408 });
+        }
+        
+        return json({ error: 'Internal server error', details: error.message }, { status: 500 });
     }
 }

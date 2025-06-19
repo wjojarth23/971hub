@@ -4,9 +4,9 @@
   import { userStore } from '$lib/stores/user.js';
   import { onShapeAPI } from '$lib/onshape.js';
   import { Users, Plus, Link, Upload, Settings, FileText, ExternalLink, UserPlus, Download } from 'lucide-svelte';
-  import { goto } from '$app/navigation';
-  let user = null;
+  import { goto } from '$app/navigation';  let user = null;
   let loading = true;
+  let loadingStep = 'Initializing...';
   let subsystems = [];
   let showCreateModal = false;
   let showLinkModal = false;
@@ -21,57 +21,98 @@
   let builds = [];
   let stockTypes = [];
   let buildBOM = [];
-  let loadingBuild = false;
-  onMount(async () => {
-    // Check authentication
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      goto('/');
-      return;
+  let loadingBuild = false;  onMount(async () => {
+    console.time('Total CAD page load');
+    
+    try {
+      loadingStep = 'Checking authentication...';
+      // Only subscribe to userStore, do not re-fetch session or user profile
+      userStore.subscribe(value => {
+        user = value;
+      });
+
+      // If user is not present, redirect to login
+      if (!user) {
+        goto('/');
+        return;
+      }
+
+      loadingStep = 'Ensuring user profile...';
+      console.time('Ensure user profile');
+      await ensureUserProfile(user);
+      console.timeEnd('Ensure user profile');
+
+      // Add timeout wrapper for each loading operation
+      loadingStep = 'Loading subsystems...';
+      console.time('Load subsystems');
+      try {
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Subsystems loading timeout')), 30000)
+        );
+        await Promise.race([loadSubsystems(), timeoutPromise]);
+      } catch (subsystemError) {
+        console.error('Subsystems loading failed or timed out:', subsystemError);
+        subsystems = []; // Set empty array as fallback
+      }
+      console.timeEnd('Load subsystems');
+
+      loadingStep = 'Loading builds...';
+      console.time('Load builds');
+      try {
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Builds loading timeout')), 30000)
+        );
+        await Promise.race([loadBuilds(), timeoutPromise]);
+      } catch (buildsError) {
+        console.error('Builds loading failed or timed out:', buildsError);
+        builds = []; // Set empty array as fallback
+      }
+      console.timeEnd('Load builds');
+
+      loadingStep = 'Loading stock types...';
+      console.time('Load stock types');
+      try {
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Stock types loading timeout')), 30000)
+        );
+        await Promise.race([loadStockTypes(), timeoutPromise]);
+      } catch (stockError) {
+        console.error('Stock types loading failed or timed out:', stockError);
+        stockTypes = []; // Set empty array as fallback
+      }
+      console.timeEnd('Load stock types');
+
+    } catch (error) {
+      console.error('Critical error in onMount:', error);
+    } finally {
+      loading = false; // Always set loading to false
+      console.log('Loading state set to false');
+      console.timeEnd('Total CAD page load');
     }
-
-    // Ensure user profile exists
-    await ensureUserProfile(session.user);
-
-    // Get user profile
-    userStore.subscribe(value => {
-      user = value;
-    });
-
-    await loadSubsystems();
-    await loadBuilds();
-    await loadStockTypes();
-    loading = false; // Set loading to false only after all data is loaded
   });
 
   async function ensureUserProfile(authUser) {
+    // Only upsert if user object has the expected fields
+    if (!authUser || !authUser.id) return;
     try {
-      const { data, error } = await supabase        .from('user_profiles')
+      const { data, error } = await supabase
+        .from('user_profiles')
         .upsert({
           id: authUser.id,
-          full_name: (
-            authUser.user_metadata?.full_name
-              ? authUser.user_metadata.full_name
-              : (
-                  typeof authUser.user_metadata?.display_name === 'string'
-                    ? authUser.user_metadata.display_name.split(' ')[0]
-                    : ''
-                )
-          ),
+          full_name: authUser.full_name || '',
           email: authUser.email,
-          role: authUser.user_metadata?.role || 'member',
-          permissions: Array.isArray(authUser.user_metadata?.permissions)
-            ? authUser.user_metadata.permissions.map(String)
-            : [String(authUser.user_metadata?.permissions || 'basic')]
-        }, {
-          onConflict: 'id'
+          role: authUser.role || 'member',
+          permissions: Array.isArray(authUser.permissions)
+            ? authUser.permissions.map(String)
+            : [String(authUser.permissions || 'basic')]
         });
-
       if (error) console.error('Error ensuring user profile:', error);
     } catch (error) {
       console.error('Error ensuring user profile:', error);
     }
-  }async function loadSubsystems() {
+  }
+  // Removed duplicated/erroneous code after ensureUserProfile
+  async function loadSubsystems() {
     try {
       // First, fetch subsystems with member info
       const { data, error } = await supabase
@@ -277,6 +318,7 @@
   }
   async function loadBuilds() {
     try {
+      console.time('Fetch builds');
       const { data, error } = await supabase
         .from('builds')
         .select(`
@@ -284,6 +326,7 @@
           subsystems(name)
         `)
         .order('created_at', { ascending: false });
+      console.timeEnd('Fetch builds');
 
       if (error) throw error;
       builds = data || [];
@@ -294,9 +337,11 @@
 
   async function loadStockTypes() {
     try {
+      console.time('Fetch stock types');
       const { data, error } = await supabase
         .from('stock_types')
         .select('*');
+      console.timeEnd('Fetch stock types');
 
       if (error) throw error;
       stockTypes = data || [];
@@ -636,7 +681,8 @@
 {#if loading}
   <div class="loading-container">
     <div class="loading-spinner"></div>
-    <p>Loading...</p>
+    <p>{loadingStep}</p>
+    <small>If this takes more than 30 seconds, there may be an issue with the OnShape API.</small>
   </div>
 {:else if user}
   <div class="cad-container">

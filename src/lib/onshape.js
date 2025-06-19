@@ -65,17 +65,30 @@ class OnShapeAPI {
     async getDocumentReleases(documentId) {
         console.warn('Document releases endpoint may not be available in OnShape API v11. Using empty array.');
         return [];
-    }    // Get document versions  
+    }
+
+    // Get document versions
     async getDocumentVersions(documentId) {
         try {
-            const response = await fetch(`${this.apiRoute}?action=versions&documentId=${documentId}`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second client timeout
+            
+            const response = await fetch(`${this.apiRoute}?action=versions&documentId=${documentId}`, {
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
             
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorText = await response.text();
+                throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
             }
             
             return await response.json();
         } catch (error) {
+            if (error.name === 'AbortError') {
+                throw new Error('Request timeout - OnShape API is taking too long to respond');
+            }
             console.error('Error fetching document versions:', error);
             throw error;
         }
@@ -121,17 +134,28 @@ class OnShapeAPI {
                 params.append('wvmid', workspaceId);
             }
             
-            const response = await fetch(`${this.apiRoute}?${params}`);
-              if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for BOM
             
-            return await response.json();
+            const response = await fetch(`${this.apiRoute}?${params}`, {
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+            }
+              return await response.json();
         } catch (error) {
+            if (error.name === 'AbortError') {
+                throw new Error('Request timeout - OnShape BOM API is taking too long to respond');
+            }
             console.error('Error fetching assembly BOM:', error);
             throw error;
         }
-    }    // Get part bounding box
+    }// Get part bounding box
     async getPartBoundingBox(documentId, wvm, wvmId, elementId, partId) {
         try {            const params = new URLSearchParams({
                 action: 'part-bounding-box',
