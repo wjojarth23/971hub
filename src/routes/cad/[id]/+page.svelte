@@ -19,6 +19,8 @@
   let stockTypes = [];
   let loadingBOM = false;
   let loadingBuild = false;
+  // Track which parts have been added to the parts table
+  let addedPartsSet = new Set();
   onMount(async () => {
     try {
       // Check authentication
@@ -693,25 +695,9 @@
   async function addSingleToBuild(item) {
     loadingBuild = true;
     try {
-      // Create a new build for this item (or you could group by session/user if needed)
-      const buildHash = `${subsystem.onshape_document_id}_${selectedVersion?.id || 'manual'}_${item.part_number || item.part_name}_${Date.now()}`;
-      const { data: build, error } = await supabase
-        .from('builds')
-        .insert([{
-          subsystem_id: subsystem.id,
-          release_id: selectedVersion?.id || null,
-          release_name: selectedVersion?.name || 'Manual Add',
-          build_hash: buildHash,
-          created_by: user.id,
-          status: 'pending'
-        }])
-        .select()
-        .single();
-
-      if (error) throw error;
-
       // Determine file_url for router and 3d-print workflows
       let file_url = null;
+      let file_name = item.part_name || item.part_number || "Part";
       const workflow = item.workflow || item.manufacturing_process;
       // Prefer part-specific elementId if available, fallback to subsystem.onshape_element_id
       const elementId = item.element_id || item.onshape_element_id || subsystem.onshape_element_id;
@@ -720,22 +706,88 @@
       const wvmid = selectedVersion ? selectedVersion.id : subsystem.onshape_workspace_id;
       if (workflow === 'router' && partId && elementId) {
         file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/parasolid`;
+        file_name = `${item.part_name || item.part_number || "Part"}.x_t`;
       } else if (workflow === '3d-print' && partId && elementId) {
         file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/stl`;
+        file_name = `${item.part_name || item.part_number || "Part"}.stl`;
       }
 
-      // Insert the single BOM item, including file_url if present
-      const bomItem = { ...item, build_id: build.id, file_url };
-      const { error: bomError } = await supabase
-        .from('build_bom')
-        .insert([bomItem]);
+      // Assign stock using stock.json logic (as in create route)
+      let stock_assignment = "";
+      if (workflow && stockData[workflow]) {
+        const material = (item.material || '').toLowerCase();
+        const dimX = (item.bounding_box_x || 0) * 39.3701;
+        const dimY = (item.bounding_box_y || 0) * 39.3701;
+        const dimZ = (item.bounding_box_z || 0) * 39.3701;
+        const dimensions = [dimX, dimY, dimZ].sort((a, b) => a - b);
+        const [minDim, midDim, maxDim] = dimensions;
+        const workflowStocks = stockData[workflow] || [];
+        let bestMatch = null;
+        for (const stock of workflowStocks) {
+          if (material.includes(stock.material.toLowerCase())) {
+            if (workflow === 'laser-cut') {
+              if (stock.thickness && Math.abs(minDim - stock.thickness) < 0.1) {
+                bestMatch = stock;
+                break;
+              }
+            } else if (workflow === 'lathe') {
+              if (stock.diameter && Math.abs(maxDim - stock.diameter) < 0.1) {
+                bestMatch = stock;
+                break;
+              }
+            } else if (workflow === 'router') {
+              if (stock.outer_width && stock.outer_height) {
+                if ((Math.abs(dimX - stock.outer_width) < 0.1 && Math.abs(dimY - stock.outer_height) < 0.1) ||
+                    (Math.abs(dimX - stock.outer_height) < 0.1 && Math.abs(dimY - stock.outer_width) < 0.1)) {
+                  bestMatch = stock;
+                  break;
+                }
+              }
+            } else {
+              bestMatch = stock;
+              break;
+            }
+          }
+        }
+        if (!bestMatch) {
+          bestMatch = workflowStocks.find(stock => material.includes(stock.material.toLowerCase()));
+        }
+        if (bestMatch) {
+          stock_assignment = bestMatch.description;
+        }
+      }
 
-      if (bomError) throw bomError;
+      // Insert into parts table (main manufacturing queue)
+      const project_id = `${subsystem.name}-${selectedVersion?.name || "Manual"}`;
+      const { error: partsError } = await supabase
+        .from('parts')
+        .insert([{
+          project_id,
+          workflow,
+          status: 'pending',
+          file_name,
+          file_url,
+          quantity: item.quantity || 1,
+          material: item.material || '',
+          stock_assignment,
+          bounding_box_x: item.bounding_box_x,
+          bounding_box_y: item.bounding_box_y,
+          bounding_box_z: item.bounding_box_z
+        }]);
+      if (partsError) throw partsError;
 
-      alert('Build created for this item!');
+      // Optionally, also insert into build_bom for tracking (if needed)
+      // const bomItem = { ...item, build_id: build.id, file_url };
+      // await supabase.from('build_bom').insert([bomItem]);
+
+      // Mark as added in UI
+      addedPartsSet = new Set([...addedPartsSet, item.part_number || item.part_name]);
+
+      // UI feedback
+      alert('Part added to manufacturing queue!');
     } catch (error) {
-      console.error('Error creating build for item:', error);
-      alert('Failed to create build for this item: ' + error.message);
+      console.error('Error creating part for item:', error);
+      alert('Failed to add part: ' + error.message);
     } finally {
       loadingBuild = false;
     }
@@ -963,9 +1015,19 @@
                         </select>
                       </td>
                       <td>
-                        <button class="btn btn-sm btn-outline" on:click={() => addSingleToBuild(item)}>
-                          <Plus size={14} />
-                          Add
+                        <button
+                          class="btn btn-sm btn-outline"
+                          on:click={() => addSingleToBuild(item)}
+                          disabled={addedPartsSet.has(item.part_number || item.part_name)}
+                          style={addedPartsSet.has(item.part_number || item.part_name) ? 'background:#e8f5e8;color:#388e3c;border:1px solid #a5d6a7;cursor:not-allowed;' : ''}
+                        >
+                          {#if addedPartsSet.has(item.part_number || item.part_name)}
+                            <CheckCircle size={14} />
+                            Added
+                          {:else}
+                            <Plus size={14} />
+                            Add
+                          {/if}
                         </button>
                       </td>
                     </tr>
