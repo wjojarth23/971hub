@@ -166,7 +166,7 @@ class OnShapeAPI {
         console.warn('Part properties endpoint not available in current OnShape API structure. Using empty object.');
         return {};
     }    // Analyze BOM and categorize parts using ChatGPT
-    async analyzeBOM(bom) {
+    async analyzeBOM(bom, workspaceId = null) {
         const analyzedParts = [];
         
         // BOM data structure:
@@ -177,6 +177,7 @@ class OnShapeAPI {
         
         console.log('Processing BOM items:', bomItems.length);
         console.log('BOM headers:', headers);
+        console.log('BOM structure sample:', bom);
         
         // Create a map of header IDs to property information
         const headerMap = {};
@@ -195,6 +196,41 @@ class OnShapeAPI {
             console.log('First BOM item structure:', bomItems[0]);
             console.log('Header ID to value mapping:', bomItems[0].headerIdToValue);
         }
+        
+        // Debug: show all available headers to understand the structure
+        if (headers.length > 0) {
+            console.log('=== AVAILABLE HEADERS ===');
+            headers.forEach(header => {
+                console.log(`Header ID: ${header.id}`);
+                console.log(`  - Name: "${header.name}"`);
+                console.log(`  - Property Name: "${header.propertyName}"`);
+                console.log(`  - Value Type: "${header.valueType}"`);
+                console.log('---');
+            });
+        }
+
+        // Debug: show first item's actual values
+        if (bomItems.length > 0) {
+            console.log('=== FIRST ITEM VALUES ===');
+            const firstItem = bomItems[0];
+            const headerValues = firstItem.headerIdToValue || {};
+            Object.entries(headerValues).forEach(([headerId, value]) => {
+                const header = headerMap[headerId];
+                console.log(`Header ${headerId} (${header?.name || 'unknown'}): "${value}"`);
+            });
+        }        // Get workspace ID from multiple possible sources
+        const resolvedWorkspaceId = workspaceId || 
+                                  bom.bomSource?.workspace?.id || 
+                                  bom.workspaceId || 
+                                  bom.bomSource?.workspaceId ||
+                                  bom.bomSource?.documentVersion?.microversion?.documentId; // Try document ID as fallback
+        
+        console.log('Workspace ID parameter passed:', workspaceId);
+        console.log('BOM Source workspace:', bom.bomSource?.workspace?.id);
+        console.log('BOM workspaceId:', bom.workspaceId);
+        console.log('BOM Source workspaceId:', bom.bomSource?.workspaceId);
+        console.log('BOM Document ID:', bom.bomSource?.document?.id);
+        console.log('Final resolved workspace ID:', resolvedWorkspaceId);
         
         // Prepare data for ChatGPT analysis
         const bomDataForAI = [];
@@ -218,43 +254,71 @@ class OnShapeAPI {
                 let partId = '';
                 let description = '';
                 let material = '';
-                let vendor = '';
-                
-                // Map the row data using headers
+                let vendor = '';                // Map the row data using headers - try different property name variations
                 for (const [headerId, value] of Object.entries(headerValues)) {
                     const header = headerMap[headerId];
                     if (!header) continue;
                     
-                    console.log(`Processing header ${headerId} (${header.propertyName}):`, value);
+                    console.log(`Processing header ${headerId} (${header.propertyName || header.name}):`, value);
                     
-                    switch (header.propertyName) {
-                        case 'item':
-                        case 'name':
-                            if (value) partName = String(value);
-                            break;
-                        case 'partNumber':
-                            if (value) partNumber = String(value);
-                            break;
-                        case 'quantity':
-                            if (value) quantity = parseFloat(value) || 1;
-                            break;
-                        case 'description':
-                            if (value) description = String(value);
-                            break;
-                        case 'vendor':
-                            if (value) vendor = String(value);
-                            break;
-                        case 'material':
-                            if (value && typeof value === 'object') {
-                                material = value.displayName || value.name || String(value);
-                            } else if (value) {
-                                material = String(value);
-                            }
-                            break;
+                    const propName = (header.propertyName || header.name || '').toLowerCase();
+                    
+                    // More flexible matching for part names - PRIORITIZE "name" over "item"
+                    // "name" is the actual part name, "item" is just the BOM position number
+                    if (propName === 'name' || propName === 'part name') {
+                        if (value && String(value).trim() !== '' && String(value) !== 'Unknown Part') {
+                            partName = String(value);
+                            console.log(`Found part name "${partName}" from header "${propName}"`);
+                        }
                     }
-                }
-                
-                // Get part ID from item source
+                    // Secondary name matches - but only if we haven't found a good name yet
+                    else if ((propName.includes('name') || propName.includes('component')) && partName === 'Unknown Part') {
+                        if (value && String(value).trim() !== '' && String(value) !== 'Unknown Part') {
+                            partName = String(value);
+                            console.log(`Found part name "${partName}" from secondary header "${propName}"`);
+                        }
+                    }
+                    // Part number matching
+                    else if (propName.includes('partnumber') || propName.includes('part number') || propName === 'part number' || 
+                             propName.includes('part_number') || propName.includes('number')) {
+                        if (value) {
+                            partNumber = String(value);
+                            console.log(`Found part number "${partNumber}" from header "${propName}"`);
+                        }
+                    }
+                    // Quantity matching
+                    else if (propName.includes('quantity') || propName.includes('qty')) {
+                        if (value) {
+                            quantity = parseFloat(value) || 1;
+                            console.log(`Found quantity ${quantity} from header "${propName}"`);
+                        }
+                    }
+                    // Description matching
+                    else if (propName.includes('description') || propName.includes('desc')) {
+                        if (value) {
+                            description = String(value);
+                            console.log(`Found description "${description}" from header "${propName}"`);
+                        }
+                    }
+                    // Vendor matching
+                    else if (propName.includes('vendor') || propName.includes('supplier')) {
+                        if (value) {
+                            vendor = String(value);
+                            console.log(`Found vendor "${vendor}" from header "${propName}"`);
+                        }
+                    }
+                    // Material matching
+                    else if (propName.includes('material')) {
+                        if (value && typeof value === 'object') {
+                            material = value.displayName || value.name || String(value);
+                        } else if (value) {
+                            material = String(value);
+                        }
+                        if (material) {
+                            console.log(`Found material "${material}" from header "${propName}"`);
+                        }
+                    }
+                }                // Get part ID from item source
                 if (item.itemSource && item.itemSource.partId) {
                     partId = item.itemSource.partId;
                 }
@@ -268,40 +332,51 @@ class OnShapeAPI {
                     material, 
                     vendor 
                 });
-                  // Get bounding box information if available
+                
+                // Get bounding box information if available
                 let boundingBox = null;
                 let boundingBoxX = null;
                 let boundingBoxY = null;
                 let boundingBoxZ = null;
-                
-                if (partId && partId !== '' && item.itemSource?.elementId) {
+                  if (partId && partId !== '' && item.itemSource?.elementId && resolvedWorkspaceId) {
                     try {
-                        // Try to get bounding box, but don't let failures block the analysis
-                        const bbox = await this.getPartBoundingBox(
-                            bom.bomSource?.document?.id || bom.documentId,
-                            'w', // workspace
-                            bom.bomSource?.workspace?.id || bom.workspaceId,
-                            item.itemSource.elementId, // Use the part's specific element ID
-                            partId
-                        );
+                        // Get the document ID from the BOM source
+                        const documentId = bom.bomSource?.document?.id || bom.documentId;
                         
-                        if (bbox && bbox.highX !== undefined && bbox.lowX !== undefined) {
-                            boundingBoxX = Math.abs(bbox.highX - bbox.lowX); // Keep in meters for now
-                            boundingBoxY = Math.abs(bbox.highY - bbox.lowY);
-                            boundingBoxZ = Math.abs(bbox.highZ - bbox.lowZ);
-                            boundingBox = `${(boundingBoxX * 1000).toFixed(1)}x${(boundingBoxY * 1000).toFixed(1)}x${(boundingBoxZ * 1000).toFixed(1)}mm`;
+                        if (!documentId) {
+                            console.warn(`No document ID available for bounding box lookup for "${partName}"`);
+                        } else {
+                            // Try to get bounding box, but don't let failures block the analysis
+                            const bbox = await this.getPartBoundingBox(
+                                documentId,
+                                'w', // workspace
+                                resolvedWorkspaceId,
+                                item.itemSource.elementId, // Use the part's specific element ID
+                                partId
+                            );
                             
-                            console.log(`Successfully got bounding box for ${partName}:`, boundingBox);
+                            if (bbox && bbox.highX !== undefined && bbox.lowX !== undefined) {
+                                boundingBoxX = Math.abs(bbox.highX - bbox.lowX); // Keep in meters for now
+                                boundingBoxY = Math.abs(bbox.highY - bbox.lowY);
+                                boundingBoxZ = Math.abs(bbox.highZ - bbox.lowZ);
+                                boundingBox = `${(boundingBoxX * 1000).toFixed(1)}x${(boundingBoxY * 1000).toFixed(1)}x${(boundingBoxZ * 1000).toFixed(1)}mm`;
+                                
+                                console.log(`Successfully got bounding box for ${partName}:`, boundingBox);
+                            }
                         }
                     } catch (bboxError) {
                         console.warn(`Could not fetch bounding box for "${partName}" (${partNumber}):`, bboxError.message);
+                        console.warn('Bounding box error details:', bboxError);
                         // Continue without bounding box - this is not critical for classification
                     }
                 } else {
-                    console.log(`Skipping bounding box for "${partName}" - missing partId or elementId`);
-                }
-                
-                // Add to data for AI analysis
+                    const missingFields = [];
+                    if (!partId) missingFields.push('partId');
+                    if (!item.itemSource?.elementId) missingFields.push('elementId');
+                    if (!resolvedWorkspaceId) missingFields.push('workspaceId');
+                    
+                    console.log(`Skipping bounding box for "${partName}" - missing: ${missingFields.join(', ')}`);
+                }// Add to data for AI analysis
                 bomDataForAI.push({
                     name: partName,
                     description: description,
@@ -323,7 +398,7 @@ class OnShapeAPI {
         
         console.log('BOM data prepared for AI:', bomDataForAI);
         
-        // Use ChatGPT to classify parts
+        // Use ChatGPT to classify parts - pass bounding box data too
         let classifications = [];
         try {
             console.log('Sending BOM data to ChatGPT for classification...');

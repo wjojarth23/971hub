@@ -107,6 +107,8 @@
 
     try {
       console.log('Creating build from release:', release);
+      console.log('Subsystem data:', subsystem);
+      console.log('Workspace ID:', subsystem.onshape_workspace_id);
       
       // Get BOM from OnShape using the specific version ID
       const bom = await onShapeAPI.getAssemblyBOM(
@@ -119,7 +121,7 @@
       console.log('BOM response:', bom);
 
       // Analyze and categorize BOM
-      buildBOM = await analyzeBOM(bom);
+      buildBOM = await onShapeAPI.analyzeBOM(bom, subsystem.onshape_workspace_id);
       buildBOM = await autoAssignStock(buildBOM);
 
       console.log('Processed BOM:', buildBOM);
