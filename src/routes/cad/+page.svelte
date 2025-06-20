@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
+  import { get } from 'svelte/store';
   import { onShapeAPI } from '$lib/onshape.js';
   import { Users, Plus, Link, Upload, Settings, FileText, ExternalLink, UserPlus, Download } from 'lucide-svelte';
   import { goto } from '$app/navigation';  let user = null;
@@ -21,21 +22,19 @@
   let builds = [];
   let stockTypes = [];
   let buildBOM = [];
-  let loadingBuild = false;  onMount(async () => {
+  let loadingBuild = false;
+  onMount(async () => {
     console.time('Total CAD page load');
-    
     try {
-      loadingStep = 'Checking authentication...';
-      // Only subscribe to userStore, do not re-fetch session or user profile
-      userStore.subscribe(value => {
-        user = value;
-      });
-
-      // If user is not present, redirect to login
-      if (!user) {
-        goto('/');
-        return;
+      loadingStep = 'Waiting for user profile...';
+      const waitStart = performance.now();
+      // Wait until userStore is non-null
+      while (!get(userStore)) {
+        await new Promise(r => setTimeout(r, 50));
       }
+      const waitEnd = performance.now();
+      console.log('Waited for userStore:', (waitEnd - waitStart).toFixed(0), 'ms');
+      user = get(userStore);
 
       loadingStep = 'Ensuring user profile...';
       console.time('Ensure user profile');
@@ -46,7 +45,7 @@
       loadingStep = 'Loading subsystems...';
       console.time('Load subsystems');
       try {
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Subsystems loading timeout')), 30000)
         );
         await Promise.race([loadSubsystems(), timeoutPromise]);
@@ -59,7 +58,7 @@
       loadingStep = 'Loading builds...';
       console.time('Load builds');
       try {
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Builds loading timeout')), 30000)
         );
         await Promise.race([loadBuilds(), timeoutPromise]);
@@ -72,7 +71,7 @@
       loadingStep = 'Loading stock types...';
       console.time('Load stock types');
       try {
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Stock types loading timeout')), 30000)
         );
         await Promise.race([loadStockTypes(), timeoutPromise]);
@@ -93,19 +92,43 @@
 
   async function ensureUserProfile(authUser) {
     // Only upsert if user object has the expected fields
-    if (!authUser || !authUser.id) return;
+    if (!authUser) {
+      console.error('ensureUserProfile: No authUser provided');
+      return;
+    }
+    if (!authUser.id) {
+      console.error('ensureUserProfile: authUser has no id', authUser);
+      return;
+    }
     try {
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .upsert({
-          id: authUser.id,
-          full_name: authUser.full_name || '',
-          email: authUser.email,
-          role: authUser.role || 'member',
-          permissions: Array.isArray(authUser.permissions)
-            ? authUser.permissions.map(String)
-            : [String(authUser.permissions || 'basic')]
-        });
+      console.log('ensureUserProfile: about to upsert', authUser);
+      console.time('Supabase upsert user_profiles');
+      // Add a timeout to the upsert call
+      let upsertResult;
+      try {
+        upsertResult = await Promise.race([
+          supabase
+            .from('user_profiles')
+            .upsert({
+              id: authUser.id,
+              full_name: authUser.full_name || '',
+              email: authUser.email,
+              role: authUser.role || 'member',
+              permissions: Array.isArray(authUser.permissions)
+                ? authUser.permissions.map(String)
+                : [String(authUser.permissions || 'basic')]
+            }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Supabase upsert timed out after 5s')), 5000)
+          )
+        ]);
+      } catch (timeoutError) {
+        console.error('Supabase upsert user_profiles timed out or failed:', timeoutError);
+        return;
+      }
+      const { data, error } = upsertResult;
+      console.timeEnd('Supabase upsert user_profiles');
+      console.log('ensureUserProfile: upsert result', { data, error });
       if (error) console.error('Error ensuring user profile:', error);
     } catch (error) {
       console.error('Error ensuring user profile:', error);

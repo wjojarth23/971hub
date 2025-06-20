@@ -30,8 +30,7 @@
     });
 
     await loadBuilds();
-  });
-  async function loadBuilds() {
+  });  async function loadBuilds() {
     try {
       const { data, error } = await supabase
         .from('builds')
@@ -41,9 +40,13 @@
           build_bom(
             id,
             part_name,
+            part_number,
             part_type,
+            material,
+            workflow,
             status,
-            added_to_parts_list
+            added_to_parts_list,
+            quantity
           )
         `)
         .order('created_at', { ascending: false });
@@ -51,13 +54,51 @@
       if (error) throw error;
       builds = data || [];
       
-      // Calculate stats
+      // Calculate stats and update build statuses
       buildStats = {
         total: builds.length,
-        pending: builds.filter(b => b.status === 'pending').length,
-        ready_to_assemble: builds.filter(b => b.status === 'ready_to_assemble').length,
-        assembled: builds.filter(b => b.status === 'assembled').length
+        pending: 0,
+        ready_to_assemble: 0,
+        assembled: 0
       };
+
+      // Update build statuses based on part completion
+      for (const build of builds) {
+        if (build.status !== 'assembled') {
+          const bom = build.build_bom || [];
+          if (bom.length > 0) {
+            // Check if all parts are completed
+            const allPartsComplete = bom.every(part => 
+              part.part_type === 'COTS' ? 
+                (part.status === 'delivered' || part.status === 'ordered') : 
+                part.status === 'manufactured'
+            );
+            
+            // Update build status if needed
+            if (allPartsComplete && build.status === 'pending') {
+              // Update build to ready_to_assemble
+              await supabase
+                .from('builds')
+                .update({ status: 'ready_to_assemble' })
+                .eq('id', build.id);
+              build.status = 'ready_to_assemble';
+            } else if (!allPartsComplete && bom.some(part => part.status !== 'pending')) {
+              // Update build to manufacturing if any parts are in progress
+              await supabase
+                .from('builds')
+                .update({ status: 'manufacturing' })
+                .eq('id', build.id);
+              build.status = 'manufacturing';
+            }
+          }
+        }
+        
+        // Count for stats
+        if (build.status === 'pending') buildStats.pending++;
+        else if (build.status === 'ready_to_assemble' || build.status === 'manufacturing') buildStats.ready_to_assemble++;
+        else if (build.status === 'assembled') buildStats.assembled++;
+      }
+      
     } catch (error) {
       console.error('Error loading builds:', error);
     }
@@ -84,16 +125,33 @@
 
   function getBuildProgress(build) {
     const bom = build.build_bom || [];
-    if (bom.length === 0) return { percent: 0, manufactured: 0, total: 0 };
+    if (bom.length === 0) return { percent: 0, manufactured: 0, total: 0, status: 'No parts' };
     
     const manufactured = bom.filter(item => 
-      item.part_type === 'COTS' ? item.status === 'delivered' : item.status === 'manufactured'
+      item.part_type === 'COTS' ? 
+        (item.status === 'delivered' || item.status === 'ordered') : 
+        item.status === 'manufactured'
     ).length;
+    
+    const inProgress = bom.filter(item => 
+      item.part_type === 'COTS' ? 
+        item.status === 'ordered' : 
+        (item.status === 'in-progress' || item.status === 'cammed')
+    ).length;
+    
+    let status = 'Requested';
+    if (manufactured === bom.length) {
+      status = 'Ready';
+    } else if (inProgress > 0 || manufactured > 0) {
+      status = 'Manufacturing';
+    }
     
     return {
       percent: Math.round((manufactured / bom.length) * 100),
       manufactured,
-      total: bom.length
+      total: bom.length,
+      inProgress,
+      status
     };
   }
 </script>
@@ -159,20 +217,21 @@
           <div class="builds-grid">
             {#each builds as build}
               {@const progress = getBuildProgress(build)}
-              <div class="build-card status-{build.status}">
-                <div class="build-header">
+              <div class="build-card status-{build.status}">                <div class="build-header">
                   <Package size={20} />
                   <div class="build-info">
                     <h3>{build.subsystems?.name || 'Unknown'} - {build.release_name}</h3>
-                    <p>Build #{build.build_hash}</p>
-                  </div>
+                    <p>Build #{build.build_hash?.split('_')[1] || 'N/A'}</p>                  </div>
                   <div class="build-status">
                     {#if build.status === 'pending'}
                       <Clock size={16} />
-                      <span>Pending</span>
-                    {:else if build.status === 'ready_to_assemble'}
+                      <span>{progress.status}</span>
+                    {:else if build.status === 'manufacturing'}
                       <Wrench size={16} />
-                      <span>Ready to Assemble</span>
+                      <span>Manufacturing</span>
+                    {:else if build.status === 'ready_to_assemble'}
+                      <CheckCircle size={16} />
+                      <span>Ready</span>
                     {:else if build.status === 'assembled'}
                       <CheckCircle size={16} />
                       <span>Assembled</span>
@@ -183,13 +242,73 @@
                 <div class="progress-bar">
                   <div class="progress-fill" style="width: {progress.percent}%"></div>
                 </div>
-                  <div class="build-details">
+                
+                <div class="build-details">
                   <p><strong>Progress:</strong> {progress.manufactured}/{progress.total} parts ({progress.percent}%)</p>
+                  <p><strong>Status:</strong> {progress.status}</p>
                   <p><strong>Created:</strong> {new Date(build.created_at).toLocaleDateString()}</p>
                   {#if build.assembled_at}
                     <p><strong>Assembled:</strong> {new Date(build.assembled_at).toLocaleDateString()}</p>
                   {/if}
                 </div>
+
+                <!-- PARTS TABLE FOR EACH BUILD -->
+                {#if build.build_bom && build.build_bom.length > 0}
+                  <div class="parts-table-container" style="margin-top: 1.5rem;">
+                    <table class="parts-table">
+                      <thead>
+                        <tr>
+                          <th>Part Name</th>
+                          <th>Part Number</th>
+                          <th>Qty</th>
+                          <th>Type</th>
+                          <th>Material</th>
+                          <th>Workflow</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each build.build_bom as part}
+                          <tr>
+                            <td>{part.part_name}</td>
+                            <td>{part.part_number || '-'}</td>
+                            <td>{part.quantity}</td>
+                            <td>
+                              <span class="part-type {part.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}">
+                                {part.part_type}
+                              </span>
+                            </td>
+                            <td>{part.material || '-'}</td>
+                            <td>
+                              <span class="workflow-badge workflow-{part.workflow}">
+                                {part.workflow || '-'}
+                              </span>
+                            </td>
+                            <td>
+                              <span class="status-badge status-{part.status}">
+                                {#if part.status === 'manufactured'}
+                                  ✓ Manufactured
+                                {:else if part.status === 'pending'}
+                                  ⏳ Pending
+                                {:else if part.status === 'delivered'}
+                                  ✓ Delivered  
+                                {:else if part.status === 'in-progress'}
+                                  🔄 In Progress
+                                {:else if part.status === 'cammed'}
+                                  🔧 Cammed
+                                {:else if part.status === 'ordered'}
+                                  📦 Ordered
+                                {:else}
+                                  {part.status}
+                                {/if}
+                              </span>
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                {/if}
 
                 <div class="build-actions">
                   {#if build.subsystems?.onshape_url}
@@ -199,66 +318,17 @@
                     </a>
                   {/if}
                   
-                  {#if build.status === 'ready_to_assemble'}
-                    <button 
-                      class="btn btn-primary" 
-                      on:click={() => markAsAssembled(build.id)}
-                    >
-                      <CheckCircle size={14} />
-                      Mark as Assembled
-                    </button>
+                  <!-- BUILD FINISHED BUTTON LOGIC -->
+                  {#if build.status !== 'assembled'}
+                    {@const progress = getBuildProgress(build)}
+                    {#if progress.status === 'Ready'}
+                      <button class="btn btn-success" on:click={() => markAsAssembled(build.id)}>
+                        <CheckCircle size={14} />
+                        Build Finished
+                      </button>
+                    {/if}
                   {/if}
                 </div>
-              <!-- PARTS TABLE FOR EACH BUILD -->
-              {#if build.build_bom && build.build_bom.length > 0}
-                <div class="parts-table-container" style="margin-top:1.5rem;">
-                  <table class="parts-table">
-                    <thead>
-                      <tr>
-                        <th>Part Name</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>File</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each build.build_bom as part}
-                        <tr>
-                          <td>{part.part_name}</td>
-                          <td>{part.part_type}</td>
-                          <td>
-                            {#if part.status === 'manufactured'}
-                              <span style="color: #27ae60;">Manufactured</span>
-                            {:else if part.status === 'pending'}
-                              <span style="color: #f39c12;">Pending</span>
-                            {:else if part.status === 'delivered'}
-                              <span style="color: #2980b9;">Delivered</span>
-                            {:else}
-                              <span>{part.status}</span>
-                            {/if}
-                          </td>
-                          <td>
-                            {#if part.file_url}
-                              <a href={part.file_url} target="_blank" class="btn btn-sm btn-secondary">Download</a>
-                            {:else}
-                              <span style="color:#aaa;">N/A</span>
-                            {/if}
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-                <!-- BUILD FINISHED BUTTON LOGIC -->
-                {#if build.status !== 'assembled'}
-                  {#if build.build_bom.every(part => (part.part_type === 'COTS' ? part.status === 'delivered' : part.status === 'manufactured'))}
-                    <button class="btn btn-success" style="margin-top:1rem;" on:click={() => markAsAssembled(build.id)}>
-                      <CheckCircle size={14} />
-                      Build Finished
-                    </button>
-                  {/if}
-                {/if}
-              {/if}
             </div>
           {/each}
         </div>
@@ -627,6 +697,131 @@
     align-items: center;
     min-height: 60vh;
     text-align: center;
+  }
+
+  /* Parts table styles */
+  .parts-table-container {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-top: 1rem;
+  }
+
+  .parts-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  .parts-table th,
+  .parts-table td {
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .parts-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .parts-table tr:hover {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  .part-type {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+
+  .part-type.type-cots {
+    background: #fff8e1;
+    color: #f57f17;
+    border: 1px solid #ffcc02;
+  }
+
+  .part-type.type-manufactured {
+    background: #e1f5fe;
+    color: #0277bd;
+    border: 1px solid #81d4fa;
+  }
+
+  .workflow-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    background: #f0f0f0;
+    color: #333;
+  }
+
+  .workflow-badge.workflow-3d-print {
+    background: #e8f5e8;
+    color: #2e7d32;
+  }
+
+  .workflow-badge.workflow-laser-cut {
+    background: #fff3e0;
+    color: #f57c00;
+  }
+
+  .workflow-badge.workflow-mill {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+
+  .workflow-badge.workflow-lathe {
+    background: #f3e5f5;
+    color: #7b1fa2;
+  }
+
+  .workflow-badge.workflow-router {
+    background: #fce4ec;
+    color: #c2185b;
+  }
+
+  .status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+
+  .status-badge.status-pending {
+    background: #fff8e1;
+    color: #f57f17;
+  }
+
+  .status-badge.status-manufactured,
+  .status-badge.status-delivered {
+    background: #e8f5e8;
+    color: #2e7d32;
+  }
+
+  .status-badge.status-in-progress,
+  .status-badge.status-cammed {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+
+  .status-badge.status-ordered {
+    background: #f3e5f5;
+    color: #7b1fa2;
+  }
+
+  .btn-success {
+    background: var(--success);
+    color: white;
+  }
+
+  .btn-success:hover {
+    background: #229954;
   }
 
   @media (max-width: 768px) {

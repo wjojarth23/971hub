@@ -5,7 +5,7 @@
   import { userStore } from '$lib/stores/user.js';
   import { onShapeAPI } from '$lib/onshape.js';  import { partClassificationService } from '$lib/chatgpt.js';
   import { goto } from '$app/navigation';
-  import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy } from 'lucide-svelte';
+  import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy, CheckCircle } from 'lucide-svelte';
   import stockData from '$lib/stock.json';
 
   let subsystemId = $page.params.id;
@@ -170,11 +170,13 @@
     } catch (error) {
       console.error('Error loading stock types:', error);
     }
-  }
-  async function createBuildFromRelease(release) {
+  }  async function createBuildFromRelease(release) {
     selectedVersion = release;
     loadingBOM = true;
     showBuildModal = true;
+    
+    // Clear previous added parts set for new build
+    addedPartsSet = new Set();
 
     try {
       console.log('Creating build from release:', release);
@@ -215,7 +217,7 @@
     } finally {
       loadingBOM = false;
     }
-  }  function isSubsystemMember() {
+  }function isSubsystemMember() {
     // Add null/undefined checks
     if (!subsystem || !user || !subsystem.subsystem_members) {
       console.log('Missing data for membership check:', {
@@ -730,103 +732,144 @@
   // Get all available stocks for a workflow
   function getStocksForWorkflow(workflow) {
     return stockData[workflow] || [];
-  }
-  // Add a single item to build and build_bom immediately
+  }  // Add a single item to build and build_bom immediately
   async function addSingleToBuild(item) {
+    if (!user || !selectedVersion) {
+      alert('User or version not available');
+      return;
+    }
+
+    // Check if already added
+    const partKey = item.part_number || item.part_name || `${item.part_name}_${Date.now()}`;
+    if (addedPartsSet.has(partKey)) {
+      alert('Part already added to manufacturing queue');
+      return;
+    }
+
     loadingBuild = true;
     try {
-      // Determine file_url for router and 3d-print workflows
+      // Only add manufactured parts (skip COTS)
+      if (item.part_type === 'COTS') {
+        alert('COTS items are not added to manufacturing queue. Use "Add All COTS to Purchasing" instead.');
+        return;
+      }
+
+      // Determine file_url for different workflows
       let file_url = null;
       let file_name = item.part_name || item.part_number || "Part";
       const workflow = item.workflow || item.manufacturing_process;
-      // Prefer part-specific elementId if available, fallback to subsystem.onshape_element_id
-      const elementId = item.element_id || item.onshape_element_id || subsystem.onshape_element_id;
-      const partId = item.onshape_part_id || item.part_id;
-      const wvm = selectedVersion ? 'v' : 'w';
-      const wvmid = selectedVersion ? selectedVersion.id : subsystem.onshape_workspace_id;
+        // Get OnShape element and part IDs from the BOM row data
+      // The onshape_part_id should come from the BOM analysis
+      const partId = item.onshape_part_id;
+      
+      // For element ID, we typically use the assembly element unless we have part-specific data
+      const elementId = subsystem.onshape_element_id;
+      const wvm = 'v'; // Always use version since we're creating from a specific release
+      const wvmid = selectedVersion.id;
+
+      // Generate file URLs based on workflow requirements
       if (workflow === 'router' && partId && elementId) {
         file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/parasolid`;
         file_name = `${item.part_name || item.part_number || "Part"}.x_t`;
       } else if (workflow === '3d-print' && partId && elementId) {
         file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/stl`;
         file_name = `${item.part_name || item.part_number || "Part"}.stl`;
+      } else if ((workflow === 'laser-cut' || workflow === 'lathe' || workflow === 'mill') && partId && elementId) {
+        // For now, use step files for other workflows as mentioned in requirements
+        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/step`;
+        file_name = `${item.part_name || item.part_number || "Part"}.step`;
       }
 
-      // Assign stock using stock.json logic (as in create route)
-      let stock_assignment = "";
-      if (workflow && stockData[workflow]) {
-        const material = (item.material || '').toLowerCase();
-        const dimX = (item.bounding_box_x || 0) * 39.3701;
-        const dimY = (item.bounding_box_y || 0) * 39.3701;
-        const dimZ = (item.bounding_box_z || 0) * 39.3701;
-        const dimensions = [dimX, dimY, dimZ].sort((a, b) => a - b);
-        const [minDim, midDim, maxDim] = dimensions;
-        const workflowStocks = stockData[workflow] || [];
-        let bestMatch = null;
-        for (const stock of workflowStocks) {
-          if (material.includes(stock.material.toLowerCase())) {
-            if (workflow === 'laser-cut') {
-              if (stock.thickness && Math.abs(minDim - stock.thickness) < 0.1) {
-                bestMatch = stock;
-                break;
-              }
-            } else if (workflow === 'lathe') {
-              if (stock.diameter && Math.abs(maxDim - stock.diameter) < 0.1) {
-                bestMatch = stock;
-                break;
-              }
-            } else if (workflow === 'router') {
-              if (stock.outer_width && stock.outer_height) {
-                if ((Math.abs(dimX - stock.outer_width) < 0.1 && Math.abs(dimY - stock.outer_height) < 0.1) ||
-                    (Math.abs(dimX - stock.outer_height) < 0.1 && Math.abs(dimY - stock.outer_width) < 0.1)) {
-                  bestMatch = stock;
-                  break;
-                }
-              }
-            } else {
-              bestMatch = stock;
-              break;
-            }
-          }
-        }
-        if (!bestMatch) {
-          bestMatch = workflowStocks.find(stock => material.includes(stock.material.toLowerCase()));
-        }
-        if (bestMatch) {
-          stock_assignment = bestMatch.description;
-        }
-      }
-
-      // Insert into parts table (main manufacturing queue)
-      const project_id = `${subsystem.name}-${selectedVersion?.name || "Manual"}`;
-      const { error: partsError } = await supabase
+      // Project ID format: {subsystem name}-{version name}
+      const project_id = `${subsystem.name}-${selectedVersion.name}`;
+        // Insert into parts table (main manufacturing queue)
+      const { data: partData, error: partsError } = await supabase
         .from('parts')
         .insert([{
+          name: item.part_name || item.part_number || "Unnamed Part",
+          requester: user.display_name || user.full_name || user.email,
           project_id,
           workflow,
           status: 'pending',
           file_name,
-          file_url,
+          file_url: file_url || '', // OnShape URL or empty if not available
           quantity: item.quantity || 1,
-          material: item.material || '',
-          stock_assignment,
-          bounding_box_x: item.bounding_box_x,
-          bounding_box_y: item.bounding_box_y,
-          bounding_box_z: item.bounding_box_z
-        }]);
+          material: item.material || ''
+        }])
+        .select();
+
       if (partsError) throw partsError;
 
-      // Optionally, also insert into build_bom for tracking (if needed)
-      // const bomItem = { ...item, build_id: build.id, file_url };
-      // await supabase.from('build_bom').insert([bomItem]);
+      console.log('Part added to manufacturing queue:', partData);
+
+      // Create or find existing build for this version
+      let buildId = null;
+      const buildHash = `${subsystem.onshape_document_id}_${selectedVersion.id}`;
+      
+      // Check if build already exists
+      const { data: existingBuild, error: buildQueryError } = await supabase
+        .from('builds')
+        .select('id')
+        .eq('build_hash', buildHash)
+        .single();
+
+      if (buildQueryError && buildQueryError.code !== 'PGRST116') { // PGRST116 is "not found"
+        throw buildQueryError;
+      }
+
+      if (existingBuild) {
+        buildId = existingBuild.id;
+      } else {
+        // Create new build
+        const { data: newBuild, error: buildError } = await supabase
+          .from('builds')
+          .insert([{
+            subsystem_id: subsystem.id,
+            release_id: selectedVersion.id,
+            release_name: selectedVersion.name,
+            build_hash: buildHash,
+            status: 'pending',
+            created_by: user.id
+          }])
+          .select()
+          .single();
+
+        if (buildError) throw buildError;
+        buildId = newBuild.id;
+      }      // Add to build_bom for tracking
+      const { error: bomError } = await supabase
+        .from('build_bom')
+        .insert([{
+          build_id: buildId,
+          part_name: item.part_name,
+          part_number: item.part_number,
+          quantity: item.quantity || 1,
+          part_type: item.part_type,
+          material: item.material,
+          stock_assignment: item.stock_assignment,
+          workflow: workflow,
+          bounding_box_x: item.bounding_box_x,
+          bounding_box_y: item.bounding_box_y,
+          bounding_box_z: item.bounding_box_z,
+          onshape_part_id: partId,
+          file_url: file_url, // Add file URL to build_bom for tracking
+          status: 'pending',
+          added_to_parts_list: true
+        }]);
+
+      if (bomError) throw bomError;
 
       // Mark as added in UI
-      addedPartsSet = new Set([...addedPartsSet, item.part_number || item.part_name]);
+      const partKey = item.part_number || item.part_name || `${item.part_name}_${Date.now()}`;
+      addedPartsSet = new Set([...addedPartsSet, partKey]);
 
-      // UI feedback
-      alert('Part added to manufacturing queue!');
+      // Force reactivity update
+      buildBOM = [...buildBOM];
+
+      console.log('Part successfully added to manufacturing queue and build tracking');
+      
     } catch (error) {
-      console.error('Error creating part for item:', error);
+      console.error('Error adding part to manufacturing queue:', error);
       alert('Failed to add part: ' + error.message);
     } finally {
       loadingBuild = false;
@@ -910,7 +953,7 @@
                   {/if}                  {#if isSubsystemMember()}
                     <button 
                       class="btn btn-primary btn-sm"
-                      on:click={() => createBuildFromRelease(item)}
+                      on:click={() => goto(`/cad/bom?subsystem=${subsystem.id}&version=${item.id}`)}
                     >
                       <Settings size={14} />
                       Create Build
@@ -1057,10 +1100,9 @@
                       </td>
                       <td>
                         <button
-                          class="btn btn-sm btn-outline"
+                          class="btn btn-sm btn-add-part"
                           on:click={() => addSingleToBuild(item)}
                           disabled={addedPartsSet.has(item.part_number || item.part_name)}
-                          style={addedPartsSet.has(item.part_number || item.part_name) ? 'background:#e8f5e8;color:#388e3c;border:1px solid #a5d6a7;cursor:not-allowed;' : ''}
                         >
                           {#if addedPartsSet.has(item.part_number || item.part_name)}
                             <CheckCircle size={14} />
@@ -1258,7 +1300,9 @@
   }
 
   .modal-large {
-    width: 1200px;
+    width: 98vw;
+    max-width: 1800px;
+    min-width: 1200px;
   }
 
   .modal-header {
@@ -1310,21 +1354,28 @@
 
   .bom-table {
     width: 100%;
+    table-layout: auto;
     border-collapse: collapse;
-    font-size: 0.875rem;
+    font-size: 0.85rem;
   }
 
   .bom-table th,
   .bom-table td {
-    padding: 0.75rem;
-    text-align: left;
+    padding: 0.35rem 0.5rem;
+    min-width: 80px;
+    max-width: 350px;
+    white-space: nowrap;
+    vertical-align: middle;
     border-bottom: 1px solid var(--border);
   }
 
   .bom-table th {
-    background: var(--background);
-    font-weight: 500;
-    color: var(--secondary);
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .bom-table td {
+    font-size: 0.85rem;
   }
 
   /* AI-Enhanced BOM Table Styles */
@@ -1595,5 +1646,29 @@
 
   .empty-timeline p {
     margin: 0.5rem 0;
+  }
+
+  /* Fix ADD button style: visible, blue background, white text, clear hover/disabled */
+  .btn-add-part {
+    background: #1976d2;
+    color: #fff;
+    border: 1px solid #1976d2;
+    border-radius: 6px;
+    padding: 0.3rem 0.9rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+  .btn-add-part:hover:not(:disabled) {
+    background: #1565c0;
+    color: #fff;
+    border-color: #1565c0;
+  }
+  .btn-add-part:disabled {
+    background: #e8f5e8;
+    color: #388e3c;
+    border: 1px solid #a5d6a7;
+    cursor: not-allowed;
   }
 </style>
