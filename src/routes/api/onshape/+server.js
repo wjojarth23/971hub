@@ -2,28 +2,11 @@ import { PUBLIC_ONSHAPE_ACCESS_KEY, PUBLIC_ONSHAPE_SECRET_KEY, PUBLIC_ONSHAPE_BA
 import { json } from '@sveltejs/kit';
 
 const ONSHAPE_BASE_URL = PUBLIC_ONSHAPE_BASE_URL || 'https://frc971.onshape.com';
+/* ── Auth helpers (add or replace) ─────────────────────────────── */
 
-function getAuthHeaders(isFileDownload = false) {
-    const credentials = btoa(`${PUBLIC_ONSHAPE_ACCESS_KEY}:${PUBLIC_ONSHAPE_SECRET_KEY}`);
-    const headers = {
-        'Authorization': `Basic ${credentials}`
-    };
-    
-    // Only add Content-Type for non-file downloads
-    if (!isFileDownload) {
-        headers['Content-Type'] = 'application/json';
-    }
-    
-    // Debug: Log credential info (but don't log actual credentials)
-    console.log('Auth setup:', {
-        hasAccessKey: !!PUBLIC_ONSHAPE_ACCESS_KEY,
-        hasSecretKey: !!PUBLIC_ONSHAPE_SECRET_KEY,
-        accessKeyLength: PUBLIC_ONSHAPE_ACCESS_KEY?.length || 0,
-        secretKeyLength: PUBLIC_ONSHAPE_SECRET_KEY?.length || 0,
-        isFileDownload
-    });
-    
-    return headers;
+function getBasicAuth() {
+  const cred = btoa(`${PUBLIC_ONSHAPE_ACCESS_KEY}:${PUBLIC_ONSHAPE_SECRET_KEY}`);
+  return { 'Authorization': `Basic ${cred}` };
 }
 
 export async function GET({ url }) {
@@ -100,7 +83,14 @@ export async function GET({ url }) {
                 if (!stlWvmId) {
                     return json({ error: 'Missing wvmId for STL download' }, { status: 400 });
                 }
-                apiPath = `/api/v11/parts/d/${documentId}/${stlWvm}/${stlWvmId}/e/${elementId}/partid/${stlPartId}/stl`;
+                // Add OnShape STL export parameters for better quality
+                const stlParams = new URLSearchParams({
+                    mode: 'text',
+                    grouping: 'true',
+                    scale: '1',
+                    units: 'inch'
+                });
+                apiPath = `/api/v11/parts/d/${documentId}/${stlWvm}/${stlWvmId}/e/${elementId}/partid/${stlPartId}/stl?${stlParams.toString()}`;
                 break;
             case 'download-parasolid':
                 if (!elementId) {
@@ -122,40 +112,94 @@ export async function GET({ url }) {
         }        const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-        const fullUrl = `${ONSHAPE_BASE_URL}${apiPath}`;
-        console.log('Making Onshape API request to:', fullUrl);
+    // Build the full URL we're going to request
+    /* Build absolute URL and decide auth type */
+    const fullUrl = `${ONSHAPE_BASE_URL}${apiPath}`;
+    const isFileDownload = action === 'download-stl' || action === 'download-parasolid';
 
-        // Determine if this is a file download request
-        const isFileDownload = action === 'download-stl' || action === 'download-parasolid';
-        
-        const response = await fetch(fullUrl, {
+    const headers = isFileDownload
+    ? {
+        ...getBasicAuth(),
+        'Accept': 'application/vnd.onshape.v1+octet-stream'
+      }
+    : {
+        ...getBasicAuth(),
+        'Content-Type': 'application/json'
+      };
+
+
+
+    console.log('Using authentication type: Basic Auth');
+
+          const response = await fetch(fullUrl, {
             method: 'GET',
-            headers: getAuthHeaders(isFileDownload),
-            signal: controller.signal
+            headers: headers,
+            signal: controller.signal,
+            redirect: 'manual' // Don't follow redirects automatically for file downloads
         });
 
         clearTimeout(timeoutId);
 
+        // Handle binary file downloads with proper 307 redirect handling
+        if (action === 'download-stl' || action === 'download-parasolid') {
+            console.log(`Download response status: ${response.status}`);
+            console.log('Download response headers:', Object.fromEntries(response.headers.entries()));
+            
+            if (response.status === 307 && response.headers.get('location')) {
+                // OnShape API returned a redirect to S3 - follow it
+                const s3Url = response.headers.get('location');
+                console.log('Following redirect to S3:', s3Url);
+                
+                const s3Response = await fetch(s3Url, {
+                    method: 'GET',
+                    headers: getBasicAuth(), // Re-authenticate for the S3 redirect
+                    signal: controller.signal
+                });
+                
+                if (!s3Response.ok) {
+                    const errorText = await s3Response.text();
+                    console.error(`S3 download error: ${s3Response.status} - ${errorText}`);
+                    return json({ error: `S3 download error: ${s3Response.status}`, details: errorText }, { status: s3Response.status });
+                }
+                
+                const buffer = await s3Response.arrayBuffer();
+                const fileExt = action === 'download-stl' ? 'stl' : 'x_t';
+                
+                return new Response(buffer, {
+                    headers: {
+                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/octet-stream',
+                        'Content-Disposition': `attachment; filename="part.${fileExt}"`,
+                        'Content-Length': buffer.byteLength.toString()
+                    }
+                });
+            } else if (response.status === 200) {
+                // Direct download (unlikely but possible)
+                const buffer = await response.arrayBuffer();
+                const fileExt = action === 'download-stl' ? 'stl' : 'x_t';
+                
+                return new Response(buffer, {
+                    headers: {
+                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/octet-stream',
+                        'Content-Disposition': `attachment; filename="part.${fileExt}"`,
+                        'Content-Length': buffer.byteLength.toString()
+                    }
+                });
+            } else {
+                const errorText = await response.text();
+                console.error(`OnShape download API error: ${response.status} - ${errorText}`);
+                console.error(`Full URL: ${ONSHAPE_BASE_URL}${apiPath}`);
+                console.error(`Headers:`, headers);
+                return json({ error: `OnShape download API error: ${response.status}`, details: errorText, url: `${ONSHAPE_BASE_URL}${apiPath}` }, { status: response.status });
+            }
+        }
+
+        // Handle regular API responses (non-downloads)
         if (!response.ok) {
             const errorText = await response.text();
             console.error(`OnShape API error: ${response.status} - ${errorText}`);
             console.error(`Full URL: ${ONSHAPE_BASE_URL}${apiPath}`);
-            console.error(`Headers:`, getAuthHeaders());
+            console.error(`Headers:`, headers);
             return json({ error: `OnShape API error: ${response.status}`, details: errorText, url: `${ONSHAPE_BASE_URL}${apiPath}` }, { status: response.status });
-        }
-
-        // Handle binary file downloads
-        if (action === 'download-stl' || action === 'download-parasolid') {
-            const buffer = await response.arrayBuffer();
-            const fileExt = action === 'download-stl' ? 'stl' : 'x_t';
-            
-            return new Response(buffer, {
-                headers: {
-                    'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/octet-stream',
-                    'Content-Disposition': `attachment; filename="part.${fileExt}"`,
-                    'Content-Length': buffer.byteLength.toString()
-                }
-            });
         }
 
         const data = await response.json();
