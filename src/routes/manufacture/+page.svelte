@@ -39,11 +39,11 @@
     event.preventDefault();
     event.currentTarget.classList.remove('active');
   }
-
   async function loadParts() {
     try {
+      // Use the new view that includes Onshape parameters and download URLs
       const { data, error } = await supabase
-        .from('parts')
+        .from('parts_with_download_urls')
         .select('*')
         .order('created_at', { ascending: false });
       
@@ -56,11 +56,89 @@
       loading = false;
     }
   }
-
-  async function downloadFile(fileName, partId, currentStatus) {
+  async function downloadFile(part, currentStatus) {
     try {
-      console.log('Attempting to download file:', fileName);
-      console.log('Part ID:', partId, 'Status:', currentStatus);
+      console.log('Attempting to download file for part:', part.name);
+      console.log('Part source type:', part.source_type);
+      
+      // If part is still "pending", automatically mark it as "in-progress"
+      if (currentStatus === 'pending') {
+        await updatePartStatus(part.id, 'in-progress');
+      }
+      
+      if (part.source_type === 'onshape_api') {
+        // Handle Onshape API download
+        await downloadFromOnshape(part);
+      } else {
+        // Handle storage bucket download (legacy parts created via create route)
+        await downloadFromStorage(part.file_name, part.id);
+      }
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      alert(`Error downloading file: ${error.message}`);
+    }
+  }
+  async function downloadFromOnshape(part) {
+    try {
+      console.log('Downloading from Onshape API for part:', part.name);
+      console.log('Part data:', {
+        name: part.name,
+        file_format: part.file_format,
+        onshape_document_id: part.onshape_document_id,
+        onshape_element_id: part.onshape_element_id,
+        onshape_part_id: part.onshape_part_id,
+        onshape_wvm: part.onshape_wvm,
+        onshape_wvmid: part.onshape_wvmid
+      });
+      
+      // Determine the action based on file format
+      const action = part.file_format === 'stl' ? 'download-stl' : 'download-parasolid';
+      
+      // Build the API URL
+      const params = new URLSearchParams({
+        action: action,
+        documentId: part.onshape_document_id,
+        elementId: part.onshape_element_id,
+        partId: part.onshape_part_id,
+        wvm: part.onshape_wvm,
+        wvmId: part.onshape_wvmid
+      });
+      
+      console.log('API parameters:', Object.fromEntries(params.entries()));
+      console.log('Full API URL:', `/api/onshape?${params}`);
+      
+      const response = await fetch(`/api/onshape?${params}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('API Error Response:', errorData);
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+      
+      // Create blob and download
+      const blob = await response.blob();
+      const fileExt = part.file_format === 'stl' ? 'stl' : 'x_t';
+      const fileName = `${part.name.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExt}`;
+      
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      console.log('Onshape file downloaded successfully:', fileName);
+    } catch (error) {
+      console.error('Error downloading from Onshape:', error);
+      throw error;
+    }
+  }
+
+  async function downloadFromStorage(fileName, partId) {
+    try {
+      console.log('Downloading from storage bucket:', fileName);
       
       // Try to create signed URL for the filename as stored
       let { data, error } = await supabase.storage
@@ -83,16 +161,11 @@
       
       console.log('Signed URL generated successfully:', data.signedUrl);
       
-      // If part is still "pending", automatically mark it as "in-progress"
-      if (currentStatus === 'pending') {
-        await updatePartStatus(partId, 'in-progress');
-      }
-      
       // Open the signed URL in a new tab
       window.open(data.signedUrl, '_blank');
     } catch (error) {
-      console.error('Error downloading file:', error);
-      alert(`Error downloading file: ${error.message}. The file may have been deleted or the filename may be incorrect.`);
+      console.error('Error downloading from storage:', error);
+      throw new Error(`Error downloading file: ${error.message}. The file may have been deleted or the filename may be incorrect.`);
     }
   }
 
@@ -229,12 +302,11 @@
     }
     return part.status;
   }
-
   async function exportToCSV() {
     try {
-      // Fetch all parts data
+      // Fetch all parts data from the view
       const { data, error } = await supabase
-        .from('parts')
+        .from('parts_with_download_urls')
         .select('*')
         .order('created_at', { ascending: false });
       
@@ -255,7 +327,11 @@
         'Quantity',
         'Material',
         'Status',
+        'Source Type',
         'File Name',
+        'File Format',
+        'Onshape Document ID',
+        'Onshape Version',
         'Kitting Bin',
         'Delivered',
         'Created Date',
@@ -274,7 +350,11 @@
           part.quantity || 1,
           `"${(part.material || '').replace(/"/g, '""')}"`,
           part.status || '',
+          part.source_type || '',
           `"${(part.file_name || '').replace(/"/g, '""')}"`,
+          part.file_format || '',
+          part.onshape_document_id || '',
+          part.onshape_wvmid || '',
           `"${(part.kitting_bin || '').replace(/"/g, '""')}"`,
           part.delivered ? 'Yes' : 'No',
           part.created_at ? new Date(part.created_at).toLocaleString() : '',
@@ -408,16 +488,31 @@
         <div class="part-details">
           <p><strong>Requester:</strong> {part.requester}</p>
           <p><strong>Project ID:</strong> {part.project_id}</p>
-          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>
-          {#if part.material}
+          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>          {#if part.material}
             <p><strong>Material:</strong> {part.material}</p>
           {/if}
           <p><strong>Created:</strong> {formatDate(part.created_at)}</p>
-          {#if part.file_name}
+          {#if part.source_type === 'onshape_api'}
+            <p><strong>Source:</strong> 
+              <span class="onshape-badge">
+                Onshape ({part.file_format?.toUpperCase()})
+              </span>
+            </p>
+            <p><strong>Version:</strong> {part.onshape_wvm}/{part.onshape_wvmid}</p>
+            <p>
+              <button 
+                class="file-link download-btn" 
+                on:click={() => downloadFile(part, part.status)}
+                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
+              >
+                Download {part.file_format?.toUpperCase()} file
+              </button>
+            </p>
+          {:else if part.file_name}
             <p><strong>File:</strong> 
               <button 
                 class="file-link" 
-                on:click={() => downloadFile(part.file_name, part.id, part.status)}
+                on:click={() => downloadFromStorage(part.file_name, part.id)}
                 style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
               >
                 Download {part.file_name}
@@ -619,9 +714,24 @@
     text-decoration: none;
     font-weight: 500;
   }
-  
-  .file-link:hover {
+    .file-link:hover {
     text-decoration: underline;
+  }
+  
+  .onshape-badge {
+    display: inline-flex;
+    align-items: center;
+    background: #f1c331;
+    color: #333;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  
+  .download-btn {
+    font-weight: 600;
   }
   
   .part-actions {

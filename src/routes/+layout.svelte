@@ -26,58 +26,22 @@
     });
 
     return () => subscription?.unsubscribe();
-  });
-  async function loadUserProfile(authUser) {
+  });  async function loadUserProfile(authUser) {
     try {
-      // First, ensure user profile exists
-      await supabase
-        .from('user_profiles')
-        .upsert({
-          id: authUser.id,
-          full_name: authUser.user_metadata?.full_name
-            || (typeof authUser.user_metadata?.display_name === 'string'
-                ? authUser.user_metadata.display_name.split(' ')[0]
-                : authUser.email.split('@')[0]),
-          email: authUser.email,
-          role: authUser.user_metadata?.role || 'member',
-          permissions: Array.isArray(authUser.user_metadata?.permissions)
-            ? authUser.user_metadata.permissions.map(String)
-            : [String(authUser.user_metadata?.permissions || 'basic')]
-        }, {
-          onConflict: 'id'
-        });
-
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error loading profile:', error);
-        // Use auth user data as fallback
-        user = {
-          id: authUser.id,
-          email: authUser.email,
-          full_name: authUser.user_metadata?.name || '',
-          role: authUser.user_metadata?.role || 'pending',
-          permissions: authUser.user_metadata?.permissions || 'none'
-        };
-        userStore.set(user);
-        return;
-      }
-
-      const userProfile = {
+      // Use auth user data directly - no database lookup needed
+      user = {
         id: authUser.id,
         email: authUser.email,
-        full_name: data?.full_name || authUser.user_metadata?.name || '',
-        role: data?.role || authUser.user_metadata?.role || 'pending',
-        permissions: data?.permissions || authUser.user_metadata?.permissions || 'none',
-        created_at: data?.created_at || authUser.created_at
-      };
-
-      user = userProfile;
-      userStore.set(userProfile);
+        full_name: authUser.user_metadata?.full_name
+          || (typeof authUser.user_metadata?.display_name === 'string'
+              ? authUser.user_metadata.display_name.split(' ')[0]
+              : authUser.email.split('@')[0]),
+        role: authUser.user_metadata?.role || 'member',
+        permissions: Array.isArray(authUser.user_metadata?.permissions)
+          ? authUser.user_metadata.permissions.map(String)
+          : [String(authUser.user_metadata?.permissions || 'basic')]
+      };      userStore.set(user);
+      console.log('User set from auth data:', user);
     } catch (error) {
       console.error('Error loading user profile:', error);
       // Fallback to basic user info

@@ -33,37 +33,18 @@
 
     return () => subscription?.unsubscribe();
   });
-
   async function loadUserProfile(authUser) {
     try {
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error loading profile:', error);        // Use auth user data as fallback
-        user = {
-          id: authUser.id,
-          email: authUser.email,
-          full_name: authUser.user_metadata?.name || '',
-          role: authUser.user_metadata?.role || 'pending',
-          permissions: authUser.user_metadata?.permissions || 'none'
-        };
-        userStore.set(user);
-        return;
-      }      const userProfile = {
+      // Use auth user data directly - no database lookup needed
+      user = {
         id: authUser.id,
         email: authUser.email,
-        full_name: data?.full_name || authUser.user_metadata?.name || '',
-        role: data?.role || authUser.user_metadata?.role || 'pending',
-        permissions: data?.permissions || authUser.user_metadata?.permissions || 'none',
-        created_at: data?.created_at || authUser.created_at
+        full_name: authUser.user_metadata?.name || authUser.email.split('@')[0],
+        role: authUser.user_metadata?.role || 'member',
+        permissions: authUser.user_metadata?.permissions || 'basic'
       };
-
-      user = userProfile;
-      userStore.set(userProfile);
+        userStore.set(user);
+      console.log('User set from auth data:', user);
     } catch (error) {
       console.error('Error loading user profile:', error);
     }
@@ -93,26 +74,7 @@
             }
           }
         });
-        
-        if (error) throw error;
-        
-        if (data.user) {
-          // Create user profile with default values - roles will be assigned by admin
-          const { error: profileError } = await supabase
-            .from('user_profiles')
-            .insert({
-              id: data.user.id,
-              email: data.user.email,
-              full_name: formData.name,
-              role: 'pending', // Default role until assigned by admin
-              permissions: 'none' // Default permissions until assigned by admin
-            });
-
-          if (profileError) {
-            console.error('Error creating profile:', profileError);
-            // Don't throw error as the user account was created successfully
-          }
-        }
+          if (error) throw error;
         
         if (data.user && !data.session) {
           authSuccess = 'Registration successful! Please check your email to confirm your account.';

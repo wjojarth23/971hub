@@ -25,43 +25,28 @@
     if (!session) {
       goto('/');
       return;
-    }
-
-    // Get user profile
-    const { data: userProfile } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', session.user.id)
-      .single();
-
-    if (userProfile) {
-      userStore.set(userProfile);
-      user = userProfile;
-    } else {
-      // If no user profile found, create a basic user object from session
-      user = {
-        id: session.user.id,
-        email: session.user.email,
-        display_name: session.user.email,
-        full_name: session.user.user_metadata?.full_name || session.user.email
-      };
-      console.log('Using session user data:', user);
-    }
+    }    // Use session user data directly - no database lookup needed
+    user = {
+      id: session.user.id,
+      email: session.user.email,
+      full_name: session.user.user_metadata?.full_name || session.user.email.split('@')[0],
+      role: 'member',
+      permissions: ['basic']
+    };
+    
+    userStore.set(user);
+    console.log('User set from auth data:', user);
 
     await loadData();
-  });
-  async function loadData() {
+  });  async function loadData() {
     if (!subsystemId || !versionId) {
       alert('Missing subsystem or version ID');
       goto('/cad');
       return;
     }
 
-    // Always set version data first, even if other things fail
-    version = { id: versionId, name: `Version ${versionId}` };
-
     try {
-      // Load subsystem data
+      // Load subsystem data first
       const { data: subsystemData, error: subsystemError } = await supabase
         .from('subsystems')
         .select('*')
@@ -70,6 +55,33 @@
 
       if (subsystemError) throw subsystemError;
       subsystem = subsystemData;
+
+      // Get the actual version name from Onshape API
+      if (subsystem.onshape_document_id) {
+        try {
+          const allVersions = await onShapeAPI.getDocumentVersions(subsystem.onshape_document_id);
+          const currentVersion = allVersions.find(v => v.id === versionId);
+          
+          if (currentVersion) {
+            version = { 
+              id: versionId, 
+              name: currentVersion.name || `Version ${versionId.substring(0, 8)}` 
+            };
+          } else {
+            // Fallback if version not found
+            version = { id: versionId, name: `Version ${versionId.substring(0, 8)}` };
+          }
+        } catch (versionError) {
+          console.error('Error fetching version name:', versionError);
+          // Fallback to short version of ID
+          version = { id: versionId, name: `Version ${versionId.substring(0, 8)}` };
+        }
+      } else {
+        // No Onshape document, use fallback
+        version = { id: versionId, name: `Version ${versionId.substring(0, 8)}` };
+      }
+
+      console.log('Version data loaded:', version);
 
       // Load BOM
       await loadBOM();
@@ -86,6 +98,11 @@
           onshape_workspace_id: '',
           onshape_element_id: ''
         };
+      }
+      
+      // Set fallback version data
+      if (!version) {
+        version = { id: versionId, name: `Version ${versionId.substring(0, 8)}` };
       }
     } finally {
       loading = false;
@@ -216,34 +233,35 @@
     if (item.part_type === 'COTS') {
       alert('COTS items are not added to manufacturing queue.');
       return;
-    }
-
-    processingAdd = true;
+    }    processingAdd = true;
     
-    try {
-      // Generate file URLs based on workflow
-      let file_url = null;
-      let file_name = item.part_name || item.part_number || "Part";
+    try {      // Determine file format based on workflow
+      let file_format = null;
       const workflow = item.workflow || item.manufacturing_process;
       const partId = item.onshape_part_id;
-      const elementId = subsystem.onshape_element_id;
+      const partStudioElementId = item.onshape_part_studio_element_id; // Use Part Studio element ID
       const wvm = 'v';
       const wvmid = version.id;
 
-      if (workflow === 'router' && partId && elementId) {
-        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/parasolid`;
-        file_name = `${item.part_name || item.part_number || "Part"}.x_t`;
-      } else if (workflow === '3d-print' && partId && elementId) {
-        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/stl`;
-        file_name = `${item.part_name || item.part_number || "Part"}.stl`;
-      } else if ((workflow === 'laser-cut' || workflow === 'lathe' || workflow === 'mill') && partId && elementId) {
-        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/step`;
-        file_name = `${item.part_name || item.part_number || "Part"}.step`;
+      // Validate that we have the Part Studio element ID
+      if (!partStudioElementId) {
+        throw new Error(`Missing Part Studio element ID for part "${item.part_name}". Cannot download file without Part Studio reference.`);
+      }
+
+      // Determine file format based on workflow
+      if (workflow === 'router') {
+        file_format = 'parasolid';
+      } else if (workflow === '3d-print') {
+        file_format = 'stl';
+      } else if (workflow === 'laser-cut' || workflow === 'lathe' || workflow === 'mill') {
+        file_format = 'parasolid'; // Use parasolid for machining operations
+      } else {
+        file_format = 'step'; // Default fallback
       }
 
       const project_id = `${subsystem.name}-${version.name}`;
 
-      // Insert into parts table
+      // Insert into parts table with Onshape API parameters
       const { data: partData, error: partsError } = await supabase
         .from('parts')
         .insert([{
@@ -252,10 +270,19 @@
           project_id,
           workflow,
           status: 'pending',
-          file_name,
-          file_url: file_url || '',
           quantity: item.quantity || 1,
-          material: item.material || ''
+          material: item.material || '',
+          // Onshape API fields - use Part Studio element ID for downloads
+          onshape_document_id: subsystem.onshape_document_id,
+          onshape_wvm: wvm,
+          onshape_wvmid: wvmid,
+          onshape_element_id: partStudioElementId, // Part Studio element ID (not assembly)
+          onshape_part_id: partId,
+          file_format: file_format,
+          is_onshape_part: true,
+          // Leave legacy fields empty for Onshape parts
+          file_name: '',
+          file_url: ''
         }])
         .select();
 

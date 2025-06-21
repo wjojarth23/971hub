@@ -26,8 +26,7 @@
   onMount(async () => {
     console.time('Total CAD page load');
     try {
-      loadingStep = 'Waiting for user profile...';
-      const waitStart = performance.now();
+      loadingStep = 'Waiting for user profile...';      const waitStart = performance.now();
       // Wait until userStore is non-null
       while (!get(userStore)) {
         await new Promise(r => setTimeout(r, 50));
@@ -35,11 +34,6 @@
       const waitEnd = performance.now();
       console.log('Waited for userStore:', (waitEnd - waitStart).toFixed(0), 'ms');
       user = get(userStore);
-
-      loadingStep = 'Ensuring user profile...';
-      console.time('Ensure user profile');
-      await ensureUserProfile(user);
-      console.timeEnd('Ensure user profile');
 
       // Add timeout wrapper for each loading operation
       loadingStep = 'Loading subsystems...';
@@ -89,51 +83,6 @@
       console.timeEnd('Total CAD page load');
     }
   });
-
-  async function ensureUserProfile(authUser) {
-    // Only upsert if user object has the expected fields
-    if (!authUser) {
-      console.error('ensureUserProfile: No authUser provided');
-      return;
-    }
-    if (!authUser.id) {
-      console.error('ensureUserProfile: authUser has no id', authUser);
-      return;
-    }
-    try {
-      console.log('ensureUserProfile: about to upsert', authUser);
-      console.time('Supabase upsert user_profiles');
-      // Add a timeout to the upsert call
-      let upsertResult;
-      try {
-        upsertResult = await Promise.race([
-          supabase
-            .from('user_profiles')
-            .upsert({
-              id: authUser.id,
-              full_name: authUser.full_name || '',
-              email: authUser.email,
-              role: authUser.role || 'member',
-              permissions: Array.isArray(authUser.permissions)
-                ? authUser.permissions.map(String)
-                : [String(authUser.permissions || 'basic')]
-            }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Supabase upsert timed out after 5s')), 5000)
-          )
-        ]);
-      } catch (timeoutError) {
-        console.error('Supabase upsert user_profiles timed out or failed:', timeoutError);
-        return;
-      }
-      const { data, error } = upsertResult;
-      console.timeEnd('Supabase upsert user_profiles');
-      console.log('ensureUserProfile: upsert result', { data, error });
-      if (error) console.error('Error ensuring user profile:', error);
-    } catch (error) {
-      console.error('Error ensuring user profile:', error);
-    }
-  }
   // Removed duplicated/erroneous code after ensureUserProfile
   async function loadSubsystems() {
     try {

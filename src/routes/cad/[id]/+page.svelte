@@ -3,7 +3,8 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { onShapeAPI } from '$lib/onshape.js';  import { partClassificationService } from '$lib/chatgpt.js';
+  import { onShapeAPI } from '$lib/onshape.js';  
+  import { partClassificationService } from '$lib/bom_classify.js';
   import { goto } from '$app/navigation';
   import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy, CheckCircle } from 'lucide-svelte';
   import stockData from '$lib/stock.json';
@@ -21,8 +22,7 @@
   let loadingBuild = false;  let loadingStep = 'Initializing...';
   
   // Track which parts have been added to the parts table
-  let addedPartsSet = new Set();
-  onMount(async () => {
+  let addedPartsSet = new Set();  onMount(async () => {
     try {
       loadingStep = 'Checking authentication...';
       // Check authentication
@@ -32,19 +32,16 @@
         return;
       }
 
-      loadingStep = 'Loading user profile...';
-      // Get user profile first
-      const { data: userProfile, error: userError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-
-      if (userError) {
-        console.error('Error loading user profile:', userError);
-      } else {
-        userStore.set(userProfile);
-      }
+      // Use session user data directly - no need for database lookup
+      const userData = {
+        id: session.user.id,
+        email: session.user.email,
+        full_name: session.user.user_metadata?.full_name || session.user.email,
+        role: 'member', // Default role for convenience
+        permissions: ['basic']
+      };
+      
+      userStore.set(userData);
 
       // Subscribe to user store updates
       userStore.subscribe(value => {
@@ -58,7 +55,7 @@
       console.error('Error in onMount:', error);
       goto('/');
     }
-  });  async function loadSubsystem() {
+  });async function loadSubsystem() {
     try {
       console.log('Loading subsystem with ID:', subsystemId);
       loadingStep = 'Loading subsystem details...';

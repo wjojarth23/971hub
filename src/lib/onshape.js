@@ -1,5 +1,5 @@
 import { PUBLIC_ONSHAPE_ACCESS_KEY, PUBLIC_ONSHAPE_SECRET_KEY, PUBLIC_ONSHAPE_BASE_URL } from '$env/static/public';
-import { partClassificationService } from './chatgpt.js';
+import { partClassificationService } from './bom_classify.js';
 
 class OnShapeAPI {
     constructor() {
@@ -343,10 +343,20 @@ class OnShapeAPI {
                             console.log(`Found material "${material}" from header "${propName}"`);
                         }
                     }
-                }                // Get part ID from item source
+                }                // Get part ID and Part Studio element ID from item source
+                let partStudioElementId = '';
                 if (item.itemSource && item.itemSource.partId) {
                     partId = item.itemSource.partId;
                 }
+                if (item.itemSource && item.itemSource.elementId) {
+                    partStudioElementId = item.itemSource.elementId;
+                }
+                
+                console.log('Part source info:', {
+                    partId,
+                    partStudioElementId,
+                    itemSource: item.itemSource
+                });
                 
                 console.log('Extracted data:', { 
                     partName, 
@@ -401,7 +411,7 @@ class OnShapeAPI {
                     if (!resolvedWorkspaceId) missingFields.push('workspaceId');
                     
                     console.log(`Skipping bounding box for "${partName}" - missing: ${missingFields.join(', ')}`);
-                }// Add to data for AI analysis
+                }                // Add to data for AI analysis
                 bomDataForAI.push({
                     name: partName,
                     description: description,
@@ -413,7 +423,8 @@ class OnShapeAPI {
                     bounding_box_y: boundingBoxY,
                     bounding_box_z: boundingBoxZ,
                     quantity: quantity,
-                    onshape_part_id: partId
+                    onshape_part_id: partId,
+                    onshape_part_studio_element_id: partStudioElementId
                 });
                 
             } catch (error) {
@@ -449,8 +460,7 @@ class OnShapeAPI {
             // Map classification to our part type system
             let partType = classification.classification === 'COTS' ? 'COTS' : 'manufactured';
             let workflow = classification.manufacturing_process || 'mill';
-            
-            analyzedParts.push({
+              analyzedParts.push({
                 part_name: bomItem.name,
                 part_number: bomItem.part_number,
                 quantity: bomItem.quantity,
@@ -458,6 +468,7 @@ class OnShapeAPI {
                 material: bomItem.material,
                 workflow: workflow,
                 onshape_part_id: bomItem.onshape_part_id,
+                onshape_part_studio_element_id: bomItem.onshape_part_studio_element_id,
                 bounding_box_x: bomItem.bounding_box_x,
                 bounding_box_y: bomItem.bounding_box_y,
                 bounding_box_z: bomItem.bounding_box_z,
@@ -465,7 +476,7 @@ class OnShapeAPI {
                 status: 'pending',
                 vendor: bomItem.vendor,
                 description: bomItem.description
-            });        }
+            });}
           console.log('Final analyzed parts:', analyzedParts);
         console.log('About to return analyzedParts, length:', analyzedParts.length);
         return analyzedParts;
