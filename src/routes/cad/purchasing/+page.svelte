@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { ShoppingCart, Package, DollarSign, Truck, CheckCircle, Clock, AlertTriangle } from 'lucide-svelte';
+  import { ShoppingCart, Package, DollarSign, Truck, CheckCircle, Clock, AlertTriangle, Edit, MapPin } from 'lucide-svelte';
   import { goto } from '$app/navigation';
 
   let user = null;
   let loading = true;
+  let purchasingItems = [];
 
   onMount(async () => {
     // Check authentication
@@ -16,12 +17,83 @@
       return;
     }
 
-    // Get user profile
     userStore.subscribe(value => {
       user = value;
-      loading = false;
     });
+
+    await loadPurchasingItems();
+    loading = false;
   });
+
+  async function loadPurchasingItems() {
+    try {
+      const { data, error } = await supabase
+        .from('purchasing')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      purchasingItems = data || [];
+    } catch (error) {
+      console.error('Error loading purchasing items:', error);
+      alert('Failed to load purchasing items');
+    }
+  }
+
+  async function updateStatus(item, newStatus) {
+    try {
+      const { error } = await supabase
+        .from('purchasing')
+        .update({ status: newStatus })
+        .eq('id', item.id);
+
+      if (error) throw error;
+      
+      await loadPurchasingItems();
+    } catch (error) {
+      console.error('Error updating status:', error);
+      alert('Failed to update status');
+    }
+  }
+
+  async function updateKittingBin(item, kittingBin) {
+    try {
+      const { error } = await supabase
+        .from('purchasing')
+        .update({ 
+          kitting_bin: kittingBin,
+          status: kittingBin ? 'kitted' : item.status 
+        })
+        .eq('id', item.id);
+
+      if (error) throw error;
+      
+      await loadPurchasingItems();
+    } catch (error) {
+      console.error('Error updating kitting bin:', error);
+      alert('Failed to update kitting bin');
+    }
+  }
+
+  function getStatusIcon(status) {
+    switch (status) {
+      case 'pending': return Clock;
+      case 'ordered': return ShoppingCart;
+      case 'delivered': return Truck;
+      case 'kitted': return CheckCircle;
+      default: return Package;
+    }
+  }
+
+  function getStatusColor(status) {
+    switch (status) {
+      case 'pending': return '#f39c12';
+      case 'ordered': return '#3498db';
+      case 'delivered': return '#27ae60';
+      case 'kitted': return '#2ecc71';
+      default: return '#95a5a6';
+    }
+  }
 </script>
 
 <svelte:head>
@@ -31,7 +103,7 @@
 {#if loading}
   <div class="loading-container">
     <div class="loading-spinner"></div>
-    <p>Loading...</p>
+    <p>Loading purchasing items...</p>
   </div>
 {:else if user}
   <div class="purchasing-container">
@@ -39,206 +111,130 @@
       <div class="header-content">
         <ShoppingCart size={32} />
         <div>
-          <h1>Purchasing Department</h1>
-          <p>Manage procurement, vendors, and purchase orders</p>
+          <h1>Purchasing List</h1>
+          <p>Manage COTS parts, vendors, and purchase orders</p>
         </div>
       </div>
     </div>
 
-    <div class="purchasing-sections">
-      <!-- Purchase Orders -->
-      <section class="section">
-        <h2>Recent Purchase Orders</h2>
-        <div class="orders-grid">
-          <div class="order-card status-pending">
-            <div class="order-header">
-              <Package size={20} />
-              <div class="order-info">
-                <h3>Aluminum Extrusion Kit</h3>
-                <p>PO #PO-2024-015</p>
-              </div>
-              <div class="order-status">
-                <Clock size={16} />
-                <span>Pending</span>
-              </div>
-            </div>
-            <div class="order-details">
-              <p><strong>Vendor:</strong> Industrial Supply Co.</p>
-              <p><strong>Total:</strong> $1,245.50</p>
-              <p><strong>Expected:</strong> June 25, 2025</p>
-            </div>
-          </div>
-
-          <div class="order-card status-shipped">
-            <div class="order-header">
-              <Truck size={20} />
-              <div class="order-info">
-                <h3>Electronic Components</h3>
-                <p>PO #PO-2024-014</p>
-              </div>
-              <div class="order-status">
-                <Truck size={16} />
-                <span>Shipped</span>
-              </div>
-            </div>
-            <div class="order-details">
-              <p><strong>Vendor:</strong> Electronics Plus</p>
-              <p><strong>Total:</strong> $856.75</p>
-              <p><strong>Tracking:</strong> UPS1234567890</p>
-            </div>
-          </div>
-
-          <div class="order-card status-delivered">
-            <div class="order-header">
-              <CheckCircle size={20} />
-              <div class="order-info">
-                <h3>Fasteners & Hardware</h3>
-                <p>PO #PO-2024-013</p>
-              </div>
-              <div class="order-status">
-                <CheckCircle size={16} />
-                <span>Delivered</span>
-              </div>
-            </div>
-            <div class="order-details">
-              <p><strong>Vendor:</strong> Bolt Depot</p>
-              <p><strong>Total:</strong> $432.25</p>
-              <p><strong>Delivered:</strong> June 15, 2025</p>
-            </div>
-          </div>
-
-          <div class="order-card status-urgent">
-            <div class="order-header">
-              <AlertTriangle size={20} />
-              <div class="order-info">
-                <h3>Motors & Actuators</h3>
-                <p>PO #PO-2024-016</p>
-              </div>
-              <div class="order-status">
-                <AlertTriangle size={16} />
-                <span>Urgent</span>
-              </div>
-            </div>
-            <div class="order-details">
-              <p><strong>Vendor:</strong> Motion Control Ltd.</p>
-              <p><strong>Total:</strong> $2,150.00</p>
-              <p><strong>Needed by:</strong> June 20, 2025</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Budget Overview -->
-      <section class="section">
-        <h2>Budget Overview</h2>
-        <div class="budget-grid">
-          <div class="budget-card">
-            <DollarSign size={24} />
-            <div class="budget-info">
-              <h3>Total Budget</h3>
-              <p class="budget-amount">$25,000.00</p>
-            </div>
-          </div>
-          <div class="budget-card">
-            <Package size={24} />
-            <div class="budget-info">
-              <h3>Spent This Month</h3>
-              <p class="budget-amount spent">$8,450.50</p>
-            </div>
-          </div>
-          <div class="budget-card">
-            <CheckCircle size={24} />
-            <div class="budget-info">
-              <h3>Remaining Budget</h3>
-              <p class="budget-amount remaining">$16,549.50</p>
-            </div>
-          </div>
-        </div>
-        <div class="budget-progress">
-          <div class="progress-bar">
-            <div class="progress-fill" style="width: 33.8%"></div>
-          </div>
-          <p class="progress-text">33.8% of budget used</p>
-        </div>
-      </section>
-
-      <!-- Vendor Management -->
-      <section class="section">
-        <h2>Preferred Vendors</h2>
-        <div class="vendors-grid">
-          <div class="vendor-card">
-            <div class="vendor-header">
-              <h3>Industrial Supply Co.</h3>
-              <div class="vendor-rating">
-                <span class="rating-stars">★★★★★</span>
-                <span class="rating-score">4.8/5</span>
-              </div>
-            </div>
-            <div class="vendor-details">
-              <p><strong>Specialties:</strong> Aluminum, Steel, Raw Materials</p>
-              <p><strong>Orders:</strong> 15 this year</p>
-              <p><strong>Avg. Delivery:</strong> 3-5 days</p>
-              <p><strong>Contact:</strong> orders@industrialsupply.com</p>
-            </div>
-          </div>
-
-          <div class="vendor-card">
-            <div class="vendor-header">
-              <h3>Electronics Plus</h3>
-              <div class="vendor-rating">
-                <span class="rating-stars">★★★★☆</span>
-                <span class="rating-score">4.5/5</span>
-              </div>
-            </div>
-            <div class="vendor-details">
-              <p><strong>Specialties:</strong> PCBs, Sensors, Controllers</p>
-              <p><strong>Orders:</strong> 12 this year</p>
-              <p><strong>Avg. Delivery:</strong> 2-3 days</p>
-              <p><strong>Contact:</strong> sales@electronicsplus.com</p>
-            </div>
-          </div>
-
-          <div class="vendor-card">
-            <div class="vendor-header">
-              <h3>Motion Control Ltd.</h3>
-              <div class="vendor-rating">
-                <span class="rating-stars">★★★★★</span>
-                <span class="rating-score">4.9/5</span>
-              </div>
-            </div>
-            <div class="vendor-details">
-              <p><strong>Specialties:</strong> Motors, Actuators, Pneumatics</p>
-              <p><strong>Orders:</strong> 8 this year</p>
-              <p><strong>Avg. Delivery:</strong> 5-7 days</p>
-              <p><strong>Contact:</strong> info@motioncontrol.com</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Quick Actions -->
-      <section class="section">
-        <h2>Quick Actions</h2>
-        <div class="actions-grid">
-          <button class="action-btn primary">
-            <ShoppingCart size={20} />
-            <span>Create Purchase Order</span>
-          </button>
-          <button class="action-btn secondary">
-            <Package size={20} />
-            <span>Check Inventory</span>
-          </button>
-          <button class="action-btn secondary">
-            <DollarSign size={20} />
-            <span>Budget Report</span>
-          </button>
-          <button class="action-btn secondary">
-            <Truck size={20} />
-            <span>Track Shipments</span>
-          </button>
-        </div>
-      </section>
-    </div>
+    {#if purchasingItems.length > 0}
+      <div class="purchasing-table-container">
+        <table class="purchasing-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Vendor</th>
+              <th>Part Number</th>
+              <th>Quantity</th>
+              <th>Price</th>
+              <th>Status</th>
+              <th>Kitting Location</th>
+              <th>Project</th>
+              <th>Requester</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each purchasingItems as item}
+              <tr class="status-{item.status}">
+                <td class="item-name">
+                  <div class="name-cell">
+                    <Package size={16} />
+                    {item.name}
+                  </div>
+                </td>
+                <td>
+                  {#if item.vendor}
+                    <span class="vendor-name">{item.vendor}</span>
+                  {:else}
+                    <span class="no-vendor">Not specified</span>
+                  {/if}
+                </td>
+                <td>
+                  {#if item.part_number}
+                    <code class="part-number">{item.part_number}</code>
+                  {:else}
+                    <span class="no-part-number">-</span>
+                  {/if}
+                </td>
+                <td class="quantity">
+                  {item.quantity}
+                </td>
+                <td class="price">
+                  {#if item.price}
+                    ${item.price}
+                  {:else if item.final_price}
+                    ${item.final_price}
+                  {:else}
+                    <span class="no-price">TBD</span>
+                  {/if}
+                </td>                <td>
+                  <div class="status-cell">
+                    {#if item.status === 'pending'}
+                      <Clock size={16} style="color: #f39c12" />
+                    {:else if item.status === 'ordered'}
+                      <ShoppingCart size={16} style="color: #3498db" />
+                    {:else if item.status === 'delivered'}
+                      <Truck size={16} style="color: #27ae60" />
+                    {:else if item.status === 'kitted'}
+                      <CheckCircle size={16} style="color: #2ecc71" />
+                    {:else}
+                      <Package size={16} style="color: #95a5a6" />
+                    {/if}
+                    <select 
+                      class="status-select" 
+                      value={item.status}
+                      on:change={(e) => updateStatus(item, e.target.value)}
+                    >
+                      <option value="pending">Pending</option>
+                      <option value="ordered">Ordered</option>
+                      <option value="delivered">Delivered</option>
+                      <option value="kitted">Kitted</option>
+                    </select>
+                  </div>
+                </td>
+                <td class="kitting-cell">
+                  {#if item.kitting_bin}
+                    <div class="kitting-display">
+                      <MapPin size={14} />
+                      <span>{item.kitting_bin}</span>
+                    </div>
+                  {:else}
+                    <input 
+                      class="kitting-input" 
+                      placeholder="Enter location..."
+                      on:keypress={(e) => {
+                        if (e.key === 'Enter') {
+                          updateKittingBin(item, e.target.value);
+                        }
+                      }}
+                    />
+                  {/if}
+                </td>
+                <td class="project-id">
+                  {item.project_id}
+                </td>
+                <td class="requester">
+                  {item.requester}
+                </td>
+                <td class="actions">
+                  <button class="edit-btn" title="Edit item">
+                    <Edit size={14} />
+                  </button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <div class="empty-state">
+        <ShoppingCart size={64} />
+        <h3>No Purchasing Items</h3>
+        <p>No COTS parts have been added to the purchasing list yet.</p>
+        <p>Add COTS parts from the BOM page to get started.</p>
+      </div>
+    {/if}
   </div>
 {:else}
   <div class="error-container">
@@ -291,7 +287,7 @@
   }
 
   .purchasing-container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 2rem auto;
     padding: 0 1rem;
   }
@@ -323,260 +319,189 @@
     font-size: 1.1rem;
   }
 
-  .purchasing-sections {
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-
-  .section {
+  .purchasing-table-container {
     background: var(--primary);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 2rem;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
   }
 
-  .section h2 {
-    margin: 0 0 1.5rem 0;
-    color: var(--secondary);
-    font-size: 1.5rem;
-  }
-
-  .orders-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1rem;
-  }
-
-  .order-card {
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: all 0.2s ease;
-  }
-
-  .order-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    border-color: var(--accent);
-  }
-
-  .order-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .order-info {
-    flex: 1;
-  }
-
-  .order-info h3 {
-    margin: 0;
-    color: var(--secondary);
-    font-size: 1.1rem;
-  }
-
-  .order-info p {
-    margin: 0.25rem 0 0 0;
-    color: #666;
+  .purchasing-table {
+    width: 100%;
+    border-collapse: collapse;
     font-size: 0.9rem;
   }
 
-  .order-status {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
+  .purchasing-table thead {
+    background: var(--background);
+    border-bottom: 2px solid var(--border);
+  }
+
+  .purchasing-table th {
+    padding: 1rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--secondary);
+    border-right: 1px solid var(--border);
+  }
+
+  .purchasing-table th:last-child {
+    border-right: none;
+  }
+
+  .purchasing-table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  .purchasing-table td:last-child {
+    border-right: none;
+  }
+
+  .purchasing-table tbody tr:hover {
+    background: #f8f9fa;
+  }
+
+  .item-name {
     font-weight: 500;
   }
 
-  .status-pending .order-status {
-    background: #fff3e0;
-    color: var(--warning);
-  }
-
-  .status-shipped .order-status {
-    background: #e3f2fd;
-    color: var(--info);
-  }
-
-  .status-delivered .order-status {
-    background: #e8f5e8;
-    color: var(--success);
-  }
-
-  .status-urgent .order-status {
-    background: #ffebee;
-    color: var(--danger);
-  }
-
-  .order-details p {
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-    color: #666;
-  }
-
-  .budget-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .budget-card {
+  .name-cell {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
+    gap: 0.5rem;
   }
 
-  .budget-info h3 {
-    margin: 0;
-    color: var(--secondary);
-    font-size: 1rem;
+  .vendor-name {
+    color: var(--info);
+    font-weight: 500;
   }
 
-  .budget-amount {
-    margin: 0.5rem 0 0 0;
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--secondary);
+  .no-vendor {
+    color: #999;
+    font-style: italic;
   }
 
-  .budget-amount.spent {
-    color: var(--warning);
+  .part-number {
+    background: #f1f2f6;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 0.8rem;
   }
 
-  .budget-amount.remaining {
-    color: var(--success);
+  .no-part-number {
+    color: #999;
   }
 
-  .budget-progress {
-    margin-top: 1rem;
-  }
-
-  .progress-bar {
-    width: 100%;
-    height: 12px;
-    background: var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    margin-bottom: 0.5rem;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.3s ease;
-  }
-
-  .progress-text {
-    margin: 0;
-    color: #666;
-    font-size: 0.9rem;
+  .quantity {
     text-align: center;
+    font-weight: 500;
   }
 
-  .vendors-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1rem;
+  .price {
+    color: var(--success);
+    font-weight: 500;
   }
 
-  .vendor-card {
-    background: var(--background);
+  .no-price {
+    color: #999;
+    font-style: italic;
+  }
+
+  .status-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .status-select {
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: all 0.2s ease;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    background: var(--primary);
+    color: var(--text);
   }
 
-  .vendor-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  .kitting-cell {
+    min-width: 150px;
+  }
+
+  .kitting-display {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--success);
+    font-weight: 500;
+  }
+
+  .kitting-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .kitting-input:focus {
+    outline: none;
     border-color: var(--accent);
   }
 
-  .vendor-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-  }
-
-  .vendor-header h3 {
-    margin: 0;
-    color: var(--secondary);
-    font-size: 1.1rem;
-  }
-
-  .vendor-rating {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.25rem;
-  }
-
-  .rating-stars {
-    color: #ffc107;
-    font-size: 1rem;
-  }
-
-  .rating-score {
+  .project-id {
+    font-family: 'Monaco', 'Menlo', monospace;
     font-size: 0.8rem;
     color: #666;
   }
 
-  .vendor-details p {
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
+  .requester {
     color: #666;
   }
 
-  .actions-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
+  .actions {
+    text-align: center;
   }
 
-  .action-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 1rem 1.5rem;
+  .edit-btn {
+    background: none;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--background);
-    color: var(--secondary);
-    font-size: 0.9rem;
-    font-weight: 500;
+    border-radius: 4px;
+    padding: 0.5rem;
     cursor: pointer;
+    color: var(--info);
     transition: all 0.2s ease;
   }
 
-  .action-btn.primary {
-    background: var(--accent);
-    color: var(--secondary);
-    border-color: var(--accent);
+  .edit-btn:hover {
+    background: var(--info);
+    color: var(--primary);
   }
 
-  .action-btn.primary:hover {
-    background: #d4a829;
-    border-color: #d4a829;
-  }
-
-  .action-btn.secondary:hover {
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    text-align: center;
     background: var(--primary);
-    border-color: var(--accent);
-    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: #666;
+  }
+
+  .empty-state h3 {
+    margin: 1rem 0 0.5rem 0;
+    color: var(--secondary);
+  }
+
+  .empty-state p {
+    margin: 0.25rem 0;
+    color: #999;
   }
 
   .error-container {
@@ -585,6 +510,34 @@
     align-items: center;
     min-height: 60vh;
     text-align: center;
+  }
+
+  /* Status row styling */
+  .status-pending {
+    border-left: 4px solid var(--warning);
+  }
+
+  .status-ordered {
+    border-left: 4px solid var(--info);
+  }
+
+  .status-delivered {
+    border-left: 4px solid var(--success);
+  }
+
+  .status-kitted {
+    border-left: 4px solid #2ecc71;
+  }
+
+  @media (max-width: 1200px) {
+    .purchasing-table {
+      font-size: 0.8rem;
+    }
+
+    .purchasing-table th,
+    .purchasing-table td {
+      padding: 0.5rem;
+    }
   }
 
   @media (max-width: 768px) {
@@ -600,51 +553,14 @@
     .header-content {
       flex-direction: column;
       align-items: flex-start;
-      text-align: left;
     }
 
-    .header-content h1 {
-      font-size: 1.5rem;
+    .purchasing-table-container {
+      overflow-x: auto;
     }
 
-    .section {
-      padding: 1.5rem;
-    }
-
-    .orders-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .budget-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .vendors-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .actions-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .order-header {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.75rem;
-    }
-
-    .order-status {
-      align-self: flex-start;
-    }
-
-    .vendor-header {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-
-    .vendor-rating {
-      align-items: flex-start;
+    .purchasing-table {
+      min-width: 800px;
     }
   }
 </style>

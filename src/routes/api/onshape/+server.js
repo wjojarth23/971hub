@@ -9,6 +9,120 @@ function getBasicAuth() {
   return { 'Authorization': `Basic ${cred}` };
 }
 
+/* ── Translation Handler (for both STL and STEP) ─────────────────────────────── */
+async function handlePartTranslation(documentId, wvm, wvmId, elementId, partId, format) {
+    try {
+        console.log(`Starting ${format} translation for part ${partId}`);
+        
+        // 1) Initiate translation using the PartStudio endpoint (not Assembly)
+        const exportResp = await fetch(
+            `${ONSHAPE_BASE_URL}/api/v11/partstudios/d/${documentId}/${wvm}/${wvmId}/e/${elementId}/translations`,
+            {
+                method: 'POST',
+                headers: {
+                    ...getBasicAuth(),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                    formatName: format,
+                    partIds: partId,         // single-part string
+                    onePartPerDoc: true,     // important for STEP files
+                    storeInDocument: false   // external file
+                })
+            }
+        );
+
+        if (!exportResp.ok) {
+            const errorText = await exportResp.text();
+            console.error(`${format} translation initiation failed: ${exportResp.status} - ${errorText}`);
+            return json({ error: `${format} translation initiation failed: ${exportResp.status}`, details: errorText }, { status: exportResp.status });
+        }
+
+        const { id: translationId } = await exportResp.json();
+        console.log(`${format} Translation ID:`, translationId);
+
+        // 2) Poll until DONE (with timeout)
+        let state = 'ACTIVE';
+        let attempts = 0;
+        const maxAttempts = 60; // 60 seconds max
+        let foreignId;
+        
+        while (state === 'ACTIVE' && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+            attempts++;
+            
+            const statusResp = await fetch(
+                `${ONSHAPE_BASE_URL}/api/v11/translations/${translationId}`,
+                { 
+                    headers: {
+                        ...getBasicAuth(),
+                        'Accept': 'application/json'
+                    }
+                }
+            );
+            
+            if (!statusResp.ok) {
+                const errorText = await statusResp.text();
+                console.error(`Translation status check failed: ${statusResp.status} - ${errorText}`);
+                return json({ error: `Translation status check failed: ${statusResp.status}`, details: errorText }, { status: statusResp.status });
+            }
+            
+            const statusData = await statusResp.json();
+            state = statusData.requestState;
+            foreignId = (statusData.resultExternalDataIds || [])[0];
+            console.log(`Translation state (attempt ${attempts}):`, state);
+        }
+        
+        if (attempts >= maxAttempts) {
+            return json({ error: `${format} translation timeout - translation took too long` }, { status: 408 });
+        }
+
+        if (state !== 'DONE') {
+            return json({ error: `${format} translation failed with state: ${state}` }, { status: 500 });
+        }
+
+        if (!foreignId) {
+            return json({ error: 'No external data ID found in translation result' }, { status: 500 });
+        }
+
+        console.log(`${format} translation complete, data ID =`, foreignId);
+
+        // 3) Download the file
+        const downloadResp = await fetch(
+            `${ONSHAPE_BASE_URL}/api/v11/documents/d/${documentId}/externaldata/${foreignId}`,
+            { 
+                headers: {
+                    ...getBasicAuth(),
+                    'Accept': 'application/octet-stream'
+                }
+            }
+        );
+        
+        if (!downloadResp.ok) {
+            const errorText = await downloadResp.text();
+            return json({ error: `Failed to download ${format} file: ${downloadResp.status}`, details: errorText }, { status: downloadResp.status });
+        }
+        
+        const buffer = await downloadResp.arrayBuffer();
+        
+        const fileExt = format === 'STL' ? 'stl' : 'step';
+        const contentType = format === 'STL' ? 'application/sla' : 'application/step';
+        
+        return new Response(buffer, {
+            headers: {
+                'Content-Type': contentType,
+                'Content-Disposition': `attachment; filename="${partId}.${fileExt}"`,
+                'Content-Length': buffer.byteLength.toString()
+            }
+        });
+        
+    } catch (error) {
+        console.error(`Error in ${format} translation:`, error);
+        return json({ error: `Internal server error during ${format} translation`, details: error.message }, { status: 500 });
+    }
+}
+
 export async function GET({ url }) {
     const action = url.searchParams.get('action');
     const documentId = url.searchParams.get('documentId');
@@ -83,39 +197,76 @@ export async function GET({ url }) {
                 if (!stlWvmId) {
                     return json({ error: 'Missing wvmId for STL download' }, { status: 400 });
                 }
-                // Add OnShape STL export parameters for better quality
-                const stlParams = new URLSearchParams({
-                    mode: 'text',
-                    grouping: 'true',
-                    scale: '1',
-                    units: 'inch'
-                });
-                apiPath = `/api/v11/parts/d/${documentId}/${stlWvm}/${stlWvmId}/e/${elementId}/partid/${stlPartId}/stl?${stlParams.toString()}`;
-                break;
-            case 'download-parasolid':
+                
+                // Use the new translation workflow for STL files
+                return await handlePartTranslation(documentId, stlWvm, stlWvmId, elementId, stlPartId, 'STL');case 'translate-part':
                 if (!elementId) {
-                    return json({ error: 'Missing elementId for Parasolid download' }, { status: 400 });
+                    return json({ error: 'Missing elementId for part translation' }, { status: 400 });
                 }
-                const paraslidWvm = url.searchParams.get('wvm') || 'w';
-                const paraslidWvmId = url.searchParams.get('wvmId');
-                const paraslidPartId = url.searchParams.get('partId');
-                if (!paraslidPartId) {
-                    return json({ error: 'Missing partId for Parasolid download' }, { status: 400 });
+                const transWvm = url.searchParams.get('wvm') || 'w';
+                const transWvmId = url.searchParams.get('wvmId');
+                const transPartId = url.searchParams.get('partId');
+                const format = url.searchParams.get('format') || 'STEP';
+                
+                if (!transPartId) {
+                    return json({ error: 'Missing partId for part translation' }, { status: 400 });
                 }
-                if (!paraslidWvmId) {
-                    return json({ error: 'Missing wvmId for Parasolid download' }, { status: 400 });
+                if (!transWvmId) {
+                    return json({ error: 'Missing wvmId for part translation' }, { status: 400 });
                 }
-                apiPath = `/api/v11/parts/d/${documentId}/${paraslidWvm}/${paraslidWvmId}/e/${elementId}/partid/${paraslidPartId}/parasolid`;
+                
+                // Use the new translation workflow for both STL and STEP
+                return await handlePartTranslation(documentId, transWvm, transWvmId, elementId, transPartId, format);
+            case 'download-step':
+                if (!elementId) {
+                    return json({ error: 'Missing elementId for STEP download' }, { status: 400 });
+                }
+                const stepWvm = url.searchParams.get('wvm') || 'w';
+                const stepWvmId = url.searchParams.get('wvmId');
+                const stepPartId = url.searchParams.get('partId');
+                if (!stepPartId) {
+                    return json({ error: 'Missing partId for STEP download' }, { status: 400 });
+                }
+                if (!stepWvmId) {
+                    return json({ error: 'Missing wvmId for STEP download' }, { status: 400 });
+                }
+                
+                // Use the new translation workflow for STEP files
+                return await handlePartTranslation(documentId, stepWvm, stepWvmId, elementId, stepPartId, 'STEP');
+            case 'check-translation':
+                const translationId = url.searchParams.get('translationId');
+                if (!translationId) {
+                    return json({ error: 'Missing translationId for translation check' }, { status: 400 });
+                }
+                apiPath = `/api/v11/translations/${translationId}`;
                 break;
-            default:
-                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box, download-stl, download-parasolid' }, { status: 400 });
-        }        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-    // Build the full URL we're going to request
+            case 'download-translation-result':
+                const resultTranslationId = url.searchParams.get('translationId');
+                if (!resultTranslationId) {
+                    return json({ error: 'Missing translationId for result download' }, { status: 400 });
+                }
+                
+                // Get the external data ID from translation result
+                const translationResp = await fetch(`${ONSHAPE_BASE_URL}/api/v11/translations/${resultTranslationId}`, {
+                    headers: getBasicAuth()
+                });
+                if (!translationResp.ok) {
+                    return json({ error: 'Failed to get translation result' }, { status: translationResp.status });
+                }
+                const translationData = await translationResp.json();
+                const externalDataId = translationData.resultExternalDataIds?.[0];
+                if (!externalDataId) {
+                    return json({ error: 'No external data ID found in translation result' }, { status: 400 });
+                }
+                
+                apiPath = `/api/v11/documents/d/${documentId}/externaldata/${externalDataId}`;
+                break;            default:
+                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box, download-stl, download-step, translate-part, check-translation, download-translation-result' }, { status: 400 });
+        }const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout    // Build the full URL we're going to request
     /* Build absolute URL and decide auth type */
     const fullUrl = `${ONSHAPE_BASE_URL}${apiPath}`;
-    const isFileDownload = action === 'download-stl' || action === 'download-parasolid';
+    const isFileDownload = action === 'download-stl' || action === 'download-translation-result';
 
     const headers = isFileDownload
     ? {
@@ -138,10 +289,8 @@ export async function GET({ url }) {
             redirect: 'manual' // Don't follow redirects automatically for file downloads
         });
 
-        clearTimeout(timeoutId);
-
-        // Handle binary file downloads with proper 307 redirect handling
-        if (action === 'download-stl' || action === 'download-parasolid') {
+        clearTimeout(timeoutId);        // Handle binary file downloads with proper 307 redirect handling
+        if (action === 'download-stl' || action === 'download-translation-result') {
             console.log(`Download response status: ${response.status}`);
             console.log('Download response headers:', Object.fromEntries(response.headers.entries()));
             
@@ -160,26 +309,24 @@ export async function GET({ url }) {
                     const errorText = await s3Response.text();
                     console.error(`S3 download error: ${s3Response.status} - ${errorText}`);
                     return json({ error: `S3 download error: ${s3Response.status}`, details: errorText }, { status: s3Response.status });
-                }
-                
+                }                
                 const buffer = await s3Response.arrayBuffer();
-                const fileExt = action === 'download-stl' ? 'stl' : 'x_t';
+                const fileExt = action === 'download-stl' ? 'stl' : 'step';
                 
                 return new Response(buffer, {
                     headers: {
-                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/octet-stream',
+                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/step',
                         'Content-Disposition': `attachment; filename="part.${fileExt}"`,
                         'Content-Length': buffer.byteLength.toString()
                     }
-                });
-            } else if (response.status === 200) {
+                });            } else if (response.status === 200) {
                 // Direct download (unlikely but possible)
                 const buffer = await response.arrayBuffer();
-                const fileExt = action === 'download-stl' ? 'stl' : 'x_t';
+                const fileExt = action === 'download-stl' ? 'stl' : 'step';
                 
                 return new Response(buffer, {
                     headers: {
-                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/octet-stream',
+                        'Content-Type': action === 'download-stl' ? 'application/sla' : 'application/step',
                         'Content-Disposition': `attachment; filename="part.${fileExt}"`,
                         'Content-Length': buffer.byteLength.toString()
                     }

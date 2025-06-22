@@ -658,6 +658,67 @@
     const manufacturedItems = buildBOM.filter(item => item.part_type === 'manufactured');
     alert(`Would add all ${manufacturedItems.length} manufactured parts to parts list`);
   }
+  // Download part file (STL or STEP)
+  async function downloadPartFile(item, fileType) {
+    if (!item.onshape_part_id) {
+      alert('No OnShape part ID available for this part');
+      return;
+    }
+
+    try {
+      console.log(`Downloading ${fileType} for part:`, {
+        partName: item.part_name,
+        partId: item.onshape_part_id,
+        documentId: subsystem.onshape_document_id,
+        versionId: selectedVersion.id,
+        elementId: subsystem.onshape_element_id
+      });
+
+      // Determine the action based on file type
+      const action = fileType === 'stl' ? 'download-stl' : 'download-step';
+      
+      // Build the API URL
+      const params = new URLSearchParams({
+        action: action,
+        documentId: subsystem.onshape_document_id,
+        elementId: subsystem.onshape_element_id,
+        partId: item.onshape_part_id,
+        wvm: 'v', // version mode
+        wvmId: selectedVersion.id
+      });
+      
+      console.log('API parameters:', Object.fromEntries(params.entries()));
+      
+      const response = await fetch(`/api/onshape?${params}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('API Error Response:', errorData);
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+      
+      // Create blob and download
+      const blob = await response.blob();
+      const fileExt = fileType === 'stl' ? 'stl' : 'step';
+      const fileName = `${item.part_name || item.part_number || 'part'}.${fileExt}`;
+      
+      // Trigger download in browser
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      console.log(`${fileType.toUpperCase()} download completed for ${item.part_name}`);
+      
+    } catch (error) {
+      console.error(`${fileType.toUpperCase()} download failed:`, error);
+      alert(`Failed to download ${fileType.toUpperCase()}: ${error.message}`);
+    }
+  }
 
   // Debug function to test BOM data extraction
   async function debugBOMStructure() {
@@ -762,12 +823,10 @@
       // For element ID, we typically use the assembly element unless we have part-specific data
       const elementId = subsystem.onshape_element_id;
       const wvm = 'v'; // Always use version since we're creating from a specific release
-      const wvmid = selectedVersion.id;
-
-      // Generate file URLs based on workflow requirements
+      const wvmid = selectedVersion.id;      // Generate file URLs based on workflow requirements
       if (workflow === 'router' && partId && elementId) {
-        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/parasolid`;
-        file_name = `${item.part_name || item.part_number || "Part"}.x_t`;
+        file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/step`;
+        file_name = `${item.part_name || item.part_number || "Part"}.step`;
       } else if (workflow === '3d-print' && partId && elementId) {
         file_url = `/parts/d/${subsystem.onshape_document_id}/${wvm}/${wvmid}/e/${elementId}/partid/${partId}/stl`;
         file_name = `${item.part_name || item.part_number || "Part"}.stl`;
@@ -1034,6 +1093,7 @@
                     <th>Bounding Box</th>
                     <th>Stock Assignment</th>
                     <th>Action</th>
+                    <th>Downloads</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1107,8 +1167,32 @@
                           {:else}
                             <Plus size={14} />
                             Add
-                          {/if}
-                        </button>
+                          {/if}                        </button>
+                      </td>
+                      <td>
+                        {#if item.onshape_part_id && item.part_type === 'manufactured'}
+                          <div class="download-buttons">
+                            <button
+                              class="btn btn-sm btn-download"
+                              on:click={() => downloadPartFile(item, 'stl')}
+                              title="Download STL for 3D printing"
+                            >
+                              <Download size={12} />
+                              STL
+                            </button>
+                            <button
+                              class="btn btn-sm btn-download"                              on:click={() => downloadPartFile(item, 'step')}
+                              title="Download STEP for CAM"
+                            >
+                              <Download size={12} />
+                              X_T
+                            </button>
+                          </div>
+                        {:else if !item.onshape_part_id}
+                          <span class="no-data">No part ID</span>
+                        {:else}
+                          <span class="no-data">COTS item</span>
+                        {/if}
                       </td>
                     </tr>
                   {/each}
@@ -1666,6 +1750,40 @@
     background: #e8f5e8;
     color: #388e3c;
     border: 1px solid #a5d6a7;
+    cursor: not-allowed;
+  }
+
+  .download-buttons {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-download {
+    background: #757575;
+    color: #fff;
+    border: 1px solid #757575;
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .btn-download:hover:not(:disabled) {
+    background: #616161;
+    color: #fff;
+    border-color: #616161;
+  }
+
+  .btn-download:disabled {
+    background: #e0e0e0;
+    color: #9e9e9e;
+    border: 1px solid #e0e0e0;
     cursor: not-allowed;
   }
 </style>

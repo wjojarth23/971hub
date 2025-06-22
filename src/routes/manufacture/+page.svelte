@@ -77,8 +77,7 @@
       console.error('Error downloading file:', error);
       alert(`Error downloading file: ${error.message}`);
     }
-  }
-  async function downloadFromOnshape(part) {
+  }  async function downloadFromOnshape(part) {
     try {
       console.log('Downloading from Onshape API for part:', part.name);
       console.log('Part data:', {
@@ -90,9 +89,9 @@
         onshape_wvm: part.onshape_wvm,
         onshape_wvmid: part.onshape_wvmid
       });
-      
-      // Determine the action based on file format
-      const action = part.file_format === 'stl' ? 'download-stl' : 'download-parasolid';
+
+      // Use the new translation workflow for both STL and STEP
+      const action = 'translate-part';
       
       // Build the API URL
       const params = new URLSearchParams({
@@ -101,7 +100,8 @@
         elementId: part.onshape_element_id,
         partId: part.onshape_part_id,
         wvm: part.onshape_wvm,
-        wvmId: part.onshape_wvmid
+        wvmId: part.onshape_wvmid,
+        format: part.file_format === 'stl' ? 'STL' : 'STEP'
       });
       
       console.log('API parameters:', Object.fromEntries(params.entries()));
@@ -114,10 +114,9 @@
         console.error('API Error Response:', errorData);
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-      
-      // Create blob and download
+        // Create blob and download
       const blob = await response.blob();
-      const fileExt = part.file_format === 'stl' ? 'stl' : 'x_t';
+      const fileExt = part.file_format === 'stl' ? 'stl' : 'step';
       const fileName = `${part.name.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExt}`;
       
       const url = window.URL.createObjectURL(blob);
@@ -492,20 +491,18 @@
             <p><strong>Material:</strong> {part.material}</p>
           {/if}
           <p><strong>Created:</strong> {formatDate(part.created_at)}</p>
-          {#if part.source_type === 'onshape_api'}
-            <p><strong>Source:</strong> 
+          {#if part.source_type === 'onshape_api'}            <p><strong>Source:</strong> 
               <span class="onshape-badge">
-                Onshape ({part.file_format?.toUpperCase()})
+                Onshape ({part.file_format === 'stl' ? 'STL' : 'STEP'})
               </span>
             </p>
             <p><strong>Version:</strong> {part.onshape_wvm}/{part.onshape_wvmid}</p>
-            <p>
-              <button 
+            <p>              <button 
                 class="file-link download-btn" 
                 on:click={() => downloadFile(part, part.status)}
                 style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
               >
-                Download {part.file_format?.toUpperCase()} file
+                Download {part.file_format === 'stl' ? 'STL' : 'STEP'} file
               </button>
             </p>
           {:else if part.file_name}

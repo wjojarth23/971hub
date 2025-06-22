@@ -287,15 +287,13 @@
       // Validate that we have the Part Studio element ID
       if (!partStudioElementId) {
         throw new Error(`Missing Part Studio element ID for part "${item.part_name}". Cannot download file without Part Studio reference.`);
-      }
-
-      // Determine file format based on workflow
+      }      // Determine file format based on workflow
       if (workflow === 'router') {
-        file_format = 'parasolid';
+        file_format = 'step';
       } else if (workflow === '3d-print') {
         file_format = 'stl';
       } else if (workflow === 'laser-cut' || workflow === 'lathe' || workflow === 'mill') {
-        file_format = 'parasolid'; // Use parasolid for machining operations
+        file_format = 'step'; // Use step for machining operations
       } else {
         file_format = 'step'; // Default fallback
       }
@@ -390,9 +388,129 @@
     }
   }
 
+  async function addCOTSToPurchasing(item) {
+    console.log('addCOTSToPurchasing called with:', item);
+    
+    if (!user || !version) {
+      console.error('Missing user or version:', { user, version });
+      alert('User or version not available');
+      return;
+    }
+
+    // Check if already added
+    const partKey = item.part_number || item.part_name || `${item.part_name}_${Date.now()}`;
+    if (addedPartsSet.has(partKey)) {
+      alert('Part already added to purchasing');
+      return;
+    }
+
+    // Only add COTS parts
+    if (item.part_type !== 'COTS') {
+      alert('Only COTS items can be added to purchasing.');
+      return;
+    }
+
+    processingAdd = true;
+    
+    try {
+      // First, create or get the build for this subsystem and version
+      const buildHash = `${subsystem.name}_${version.id}`;
+      let build = null;
+      
+      // Check if build already exists
+      const { data: existingBuild, error: buildCheckError } = await supabase
+        .from('builds')
+        .select('*')
+        .eq('build_hash', buildHash)
+        .single();
+
+      if (buildCheckError && buildCheckError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        throw buildCheckError;
+      }
+
+      if (existingBuild) {
+        build = existingBuild;
+        console.log('Using existing build:', build);
+      } else {
+        // Create new build
+        const { data: newBuild, error: buildCreateError } = await supabase
+          .from('builds')
+          .insert([{
+            subsystem_id: subsystem.id,
+            release_id: version.id,
+            release_name: version.name,
+            build_hash: buildHash,
+            status: 'pending',
+            created_by: user.id,
+            part_ids: [] // Initialize empty part IDs array
+          }])
+          .select()
+          .single();
+
+        if (buildCreateError) throw buildCreateError;
+        build = newBuild;
+        console.log('Created new build:', build);
+      }
+
+      // Add to purchasing table
+      const purchasingInsertData = {
+        name: item.part_name || item.part_number || "Unnamed Part",
+        requester: user.display_name || user.full_name || user.email,
+        project_id: `${subsystem.name}-${version.name}`,
+        quantity: item.quantity || 1,
+        material: item.material || '',
+        status: 'pending',
+        vendor: item.vendor || null, // Will be filled from Onshape BOM if available
+        workflow: 'purchase'
+      };
+
+      const { data: purchasingData, error: purchasingError } = await supabase
+        .from('purchasing')
+        .insert([purchasingInsertData])
+        .select();
+
+      if (purchasingError) throw purchasingError;
+      
+      const purchasingItem = purchasingData[0];
+      console.log('Part added to purchasing:', purchasingItem);
+
+      // Add the purchasing ID to the build's part_ids array
+      if (purchasingItem && purchasingItem.id) {
+        const currentPartIds = build.part_ids || [];
+        if (!currentPartIds.includes(purchasingItem.id)) {
+          const newPartIds = [...currentPartIds, purchasingItem.id];
+          
+          const { error: updateError } = await supabase
+            .from('builds')
+            .update({ part_ids: newPartIds })
+            .eq('id', build.id);
+
+          if (updateError) throw updateError;
+          console.log(`Added purchasing ID ${purchasingItem.id} to build ${build.id}`);
+        }
+      }
+
+      // Mark as added
+      addedPartsSet = new Set([...addedPartsSet, partKey]);
+      buildBOM = [...buildBOM]; // Force reactivity
+
+      alert(`Successfully added ${item.part_name} to purchasing and build "${build.build_hash}"!`);
+      
+    } catch (error) {
+      console.error('Error adding COTS part:', error);
+      alert('Failed to add COTS part: ' + error.message);
+    } finally {
+      processingAdd = false;
+    }
+  }
+
   function handleAddClick(item) {
     console.log('Add button clicked for:', item);
-    addPartToManufacturing(item);
+    if (item.part_type === 'COTS') {
+      addCOTSToPurchasing(item);
+    } else {
+      addPartToManufacturing(item);
+    }
   }  async function addAllCOTSToPurchasing() {
     const cotsItems = buildBOM.filter(item => item.part_type === 'COTS');
     if (cotsItems.length === 0) {
@@ -691,9 +809,9 @@
   @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
-  }
-  .bom-section {
+  }  .bom-section {
     /* Container made invisible - no background, border, or padding */
+    display: block;
   }
   .btn {
     display: flex;
