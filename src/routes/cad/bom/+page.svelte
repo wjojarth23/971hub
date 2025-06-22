@@ -210,8 +210,7 @@
       autoAssignStock(index);
       buildBOM = [...buildBOM]; // Force reactivity
     }
-  }
-  async function addPartToManufacturing(item) {
+  }  async function addPartToManufacturing(item) {
     console.log('addPartToManufacturing called with:', item);
     console.log('Current user:', user);
     console.log('Current version:', version);
@@ -233,9 +232,51 @@
     if (item.part_type === 'COTS') {
       alert('COTS items are not added to manufacturing queue.');
       return;
-    }    processingAdd = true;
+    }
+
+    processingAdd = true;
     
-    try {      // Determine file format based on workflow
+    try {
+      // First, create or get the build for this subsystem and version
+      const buildHash = `${subsystem.name}_${version.id}`;
+      let build = null;
+      
+      // Check if build already exists
+      const { data: existingBuild, error: buildCheckError } = await supabase
+        .from('builds')
+        .select('*')
+        .eq('build_hash', buildHash)
+        .single();
+
+      if (buildCheckError && buildCheckError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        throw buildCheckError;
+      }
+
+      if (existingBuild) {
+        build = existingBuild;
+        console.log('Using existing build:', build);
+      } else {
+        // Create new build
+        const { data: newBuild, error: buildCreateError } = await supabase
+          .from('builds')
+          .insert([{
+            subsystem_id: subsystem.id,
+            release_id: version.id,
+            release_name: version.name,
+            build_hash: buildHash,
+            status: 'pending',
+            created_by: user.id,
+            part_ids: [] // Initialize empty part IDs array
+          }])
+          .select()
+          .single();
+
+        if (buildCreateError) throw buildCreateError;
+        build = newBuild;
+        console.log('Created new build:', build);
+      }
+
+      // Determine file format based on workflow
       let file_format = null;
       const workflow = item.workflow || item.manufacturing_process;
       const partId = item.onshape_part_id;
@@ -261,40 +302,85 @@
 
       const project_id = `${subsystem.name}-${version.name}`;
 
-      // Insert into parts table with Onshape API parameters
-      const { data: partData, error: partsError } = await supabase
-        .from('parts')
-        .insert([{
-          name: item.part_name || item.part_number || "Unnamed Part",
-          requester: user.display_name || user.full_name || user.email,
-          project_id,
-          workflow,
-          status: 'pending',
-          quantity: item.quantity || 1,
-          material: item.material || '',
-          // Onshape API fields - use Part Studio element ID for downloads
+      // Insert into parts table with Onshape API parameters (if available)
+      const partInsertData = {
+        name: item.part_name || item.part_number || "Unnamed Part",
+        requester: user.display_name || user.full_name || user.email,
+        project_id,
+        workflow,
+        status: 'pending',
+        quantity: item.quantity || 1,
+        material: item.material || '',
+        // Legacy fields - leave empty for Onshape parts but required for compatibility
+        file_name: '',
+        file_url: ''
+      };
+
+      // Try to add Onshape fields if they exist in the database schema
+      let partData = null;
+      try {
+        // Check if onshape fields exist by attempting to insert with them
+        const onshapeData = {
+          ...partInsertData,
           onshape_document_id: subsystem.onshape_document_id,
           onshape_wvm: wvm,
           onshape_wvmid: wvmid,
           onshape_element_id: partStudioElementId, // Part Studio element ID (not assembly)
           onshape_part_id: partId,
           file_format: file_format,
-          is_onshape_part: true,
-          // Leave legacy fields empty for Onshape parts
-          file_name: '',
-          file_url: ''
-        }])
-        .select();
+          is_onshape_part: true
+        };
 
-      if (partsError) throw partsError;
+        const { data: onshapePartData, error: partsError } = await supabase
+          .from('parts')
+          .insert([onshapeData])
+          .select();
 
-      console.log('Part added to manufacturing queue:', partData);
+        if (partsError) {
+          // If onshape fields don't exist, fall back to basic insert
+          if (partsError.message?.includes('column') && partsError.message?.includes('does not exist')) {
+            console.warn('Onshape fields not found in parts table, using basic insert');
+            const { data: basicPartData, error: basicPartsError } = await supabase
+              .from('parts')
+              .insert([partInsertData])
+              .select();
+
+            if (basicPartsError) throw basicPartsError;
+            partData = basicPartData[0];
+            console.log('Part added to manufacturing queue (basic):', partData);
+          } else {
+            throw partsError;
+          }
+        } else {
+          partData = onshapePartData[0];
+          console.log('Part added to manufacturing queue (with Onshape data):', partData);
+        }
+      } catch (fallbackError) {
+        console.error('Failed to insert part:', fallbackError);
+        throw fallbackError;
+      }
+
+      // Add the part ID to the build's part_ids array
+      if (partData && partData.id) {
+        const currentPartIds = build.part_ids || [];
+        if (!currentPartIds.includes(partData.id)) {
+          const newPartIds = [...currentPartIds, partData.id];
+          
+          const { error: updateError } = await supabase
+            .from('builds')
+            .update({ part_ids: newPartIds })
+            .eq('id', build.id);
+
+          if (updateError) throw updateError;
+          console.log(`Added part ID ${partData.id} to build ${build.id}`);
+        }
+      }
 
       // Mark as added
       addedPartsSet = new Set([...addedPartsSet, partKey]);
       buildBOM = [...buildBOM]; // Force reactivity
 
-      alert(`Successfully added ${item.part_name} to manufacturing queue!`);
+      alert(`Successfully added ${item.part_name} to manufacturing queue and build "${build.build_hash}"!`);
       
     } catch (error) {
       console.error('Error adding part:', error);
@@ -307,9 +393,7 @@
   function handleAddClick(item) {
     console.log('Add button clicked for:', item);
     addPartToManufacturing(item);
-  }
-
-  async function addAllCOTSToPurchasing() {
+  }  async function addAllCOTSToPurchasing() {
     const cotsItems = buildBOM.filter(item => item.part_type === 'COTS');
     if (cotsItems.length === 0) {
       alert('No COTS items found in BOM');
@@ -317,9 +401,49 @@
     }
 
     try {
-      // Add all COTS items to purchasing
+      // First, create or get the build for this subsystem and version
+      const buildHash = `${subsystem.name}_${version.id}`;
+      let build = null;
+      
+      // Check if build already exists
+      const { data: existingBuild, error: buildCheckError } = await supabase
+        .from('builds')
+        .select('*')
+        .eq('build_hash', buildHash)
+        .single();
+
+      if (buildCheckError && buildCheckError.code !== 'PGRST116') {
+        throw buildCheckError;
+      }
+
+      if (existingBuild) {
+        build = existingBuild;
+      } else {
+        // Create new build
+        const { data: newBuild, error: buildCreateError } = await supabase
+          .from('builds')
+          .insert([{
+            subsystem_id: subsystem.id,
+            release_id: version.id,
+            release_name: version.name,
+            build_hash: buildHash,
+            status: 'pending',
+            created_by: user.id,
+            part_ids: []
+          }])
+          .select()
+          .single();
+
+        if (buildCreateError) throw buildCreateError;
+        build = newBuild;
+      }
+
+      const purchasingPartIds = [];
+
+      // Add all COTS items to purchasing table
       for (const item of cotsItems) {
-        const { error } = await supabase
+        // Add to purchasing table
+        const { data: purchasingData, error: purchasingError } = await supabase
           .from('purchasing')
           .insert([{
             name: item.part_name || item.part_number || "Unnamed Part",
@@ -328,12 +452,32 @@
             quantity: item.quantity || 1,
             material: item.material || '',
             status: 'pending'
-          }]);
+          }])
+          .select();
 
-        if (error) throw error;
+        if (purchasingError) throw purchasingError;
+        
+        // Collect the purchasing IDs to add to build
+        if (purchasingData && purchasingData[0]) {
+          purchasingPartIds.push(purchasingData[0].id);
+        }
       }
 
-      alert(`Successfully added ${cotsItems.length} COTS items to purchasing!`);
+      // Add the purchasing IDs to the build's part_ids array
+      if (purchasingPartIds.length > 0) {
+        const currentPartIds = build.part_ids || [];
+        const newPartIds = [...currentPartIds, ...purchasingPartIds.filter(id => !currentPartIds.includes(id))];
+        
+        const { error: updateError } = await supabase
+          .from('builds')
+          .update({ part_ids: newPartIds })
+          .eq('id', build.id);
+
+        if (updateError) throw updateError;
+        console.log(`Added ${purchasingPartIds.length} purchasing IDs to build ${build.id}`);
+      }
+
+      alert(`Successfully added ${cotsItems.length} COTS items to purchasing and build "${build.build_hash}"!`);
     } catch (error) {
       console.error('Error adding COTS items:', error);
       alert('Failed to add COTS items: ' + error.message);
@@ -341,18 +485,25 @@
   }
 </script>
 
-<div class="main-content">
-  <div class="page-header">
+<div class="main-content">  <div class="page-header">
     <div class="header-content">
-      <button class="back-button" on:click={() => goto('/cad')}>
-        <ArrowLeft size={16} />
-        Back to CAD
-      </button>
-      <div class="header-info">
-        <h1>Build BOM</h1>
-        {#if subsystem && version}
-          <p class="subsystem-description">{subsystem.name} - {version.name}</p>
-        {/if}
+      <div class="header-left">
+        <div class="header-info">
+          <h1>Build BOM</h1>
+          {#if subsystem && version}
+            <p class="subsystem-description">{subsystem.name} - {version.name}</p>
+          {/if}
+        </div>
+      </div>
+      <div class="header-right">
+        <button class="back-button" on:click={() => goto('/cad')}>
+          <ArrowLeft size={16} />
+          Back to CAD
+        </button>
+        <button class="btn btn-yellow" on:click={addAllCOTSToPurchasing}>
+          <ShoppingCart size={16} />
+          Add All COTS to Purchasing
+        </button>
       </div>
     </div>
   </div>
@@ -362,21 +513,11 @@
       <div class="loading-spinner"></div>
       <p>Loading BOM...</p>
     </div>
-  {:else}
-    <div class="bom-section">
-      <div class="bom-actions">
-        <button class="btn btn-warning" on:click={addAllCOTSToPurchasing}>
-          <ShoppingCart size={16} />
-          Add All COTS to Purchasing
-        </button>
-      </div>
-
+  {:else}    <div class="bom-section">
       <div class="bom-table-container">
-        <table class="bom-table">
-          <thead>
+        <table class="bom-table">          <thead>
             <tr>
               <th>Part Name</th>
-              <th>Part Number</th>
               <th>Qty</th>
               <th>Type</th>
               <th>Workflow</th>
@@ -386,9 +527,8 @@
               <th>Action</th>
             </tr>
           </thead>
-          <tbody>
-            {#each buildBOM as item, index}
-              <tr>
+          <tbody>            {#each buildBOM as item, index}
+              <tr class="table-row">
                 <td>
                   <div class="part-name">
                     {item.part_name}
@@ -397,7 +537,6 @@
                     {/if}
                   </div>
                 </td>
-                <td>{item.part_number || '-'}</td>
                 <td>{item.quantity}</td>
                 <td>
                   <select
@@ -437,18 +576,22 @@
                   {/if}
                 </td>
                 <td>
-                  <select bind:value={item.stock_assignment}>
-                    <option value="">Select Stock</option>
-                    {#each getStocksForWorkflow(item.workflow || 'mill') as stock}
-                      <option value={stock.description}>
-                        {stock.description}
-                      </option>
-                    {/each}
-                  </select>
+                  {#if item.part_type !== 'COTS'}
+                    <select bind:value={item.stock_assignment}>
+                      <option value="">Select Stock</option>
+                      {#each getStocksForWorkflow(item.workflow || 'mill') as stock}
+                        <option value={stock.description}>
+                          {stock.description}
+                        </option>
+                      {/each}
+                    </select>
+                  {:else}
+                    <span class="no-stock">-</span>
+                  {/if}
                 </td>
                 <td>
                   <button
-                    class="btn btn-sm btn-primary add-btn"
+                    class="btn btn-sm btn-yellow add-btn"
                     on:click={() => handleAddClick(item)}
                     disabled={addedPartsSet.has(item.part_number || item.part_name) || processingAdd}
                     class:added={addedPartsSet.has(item.part_number || item.part_name)}
@@ -471,9 +614,8 @@
   {/if}
 </div>
 
-<style>
-  .main-content {
-    max-width: 1400px;
+<style>  .main-content {
+    max-width: 1600px;
     margin: 0 auto;
     padding: 2rem;
   }
@@ -481,13 +623,22 @@
   .page-header {
     margin-bottom: 2rem;
   }
-
   .header-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .header-left {
+    flex: 1;
+  }
+
+  .header-right {
     display: flex;
     align-items: center;
     gap: 1rem;
   }
-
   .back-button {
     display: flex;
     align-items: center;
@@ -500,10 +651,10 @@
     cursor: pointer;
     font-size: 0.875rem;
     transition: all 0.2s ease;
+    height: 40px;
   }
-
   .back-button:hover {
-    background: var(--background);
+    background: var(--surface);
     border-color: var(--primary);
     color: var(--primary);
   }
@@ -528,12 +679,11 @@
     padding: 3rem;
     gap: 1rem;
   }
-
   .loading-spinner {
     width: 32px;
     height: 32px;
     border: 3px solid var(--border);
-    border-top: 3px solid var(--primary);
+    border-top: 3px solid #FFD700;
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
@@ -542,20 +692,9 @@
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
   }
-
   .bom-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.5rem;
+    /* Container made invisible - no background, border, or padding */
   }
-
-  .bom-actions {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
   .btn {
     display: flex;
     align-items: center;
@@ -577,7 +716,6 @@
   .btn-primary:hover {
     background: var(--primary-dark);
   }
-
   .btn-warning {
     background: #ff9800;
     color: white;
@@ -585,6 +723,16 @@
 
   .btn-warning:hover {
     background: #f57c00;
+  }
+
+  .btn-yellow {
+    background: #FFD700;
+    color: #333;
+    height: 40px;
+  }
+
+  .btn-yellow:hover {
+    background: #FFC107;
   }
 
   .btn-sm {
@@ -610,15 +758,18 @@
     text-align: left;
     border-bottom: 1px solid var(--border);
   }
-
   .bom-table th {
     background: var(--background);
     font-weight: 600;
     color: var(--text);
   }
 
+  .bom-table .table-row {
+    background: white;
+  }
+
   .bom-table tr:hover {
-    background: var(--background);
+    background: #f8f9fa;
   }
 
   .part-name {
@@ -629,16 +780,14 @@
     font-size: 0.75rem;
     color: var(--secondary);
     margin-top: 0.25rem;
-  }
-
-  .type-dropdown,
-  .workflow-dropdown {
+  }  .type-dropdown {
     padding: 0.375rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 0.8125rem;
     background: white;
     cursor: pointer;
+    height: 32px;
   }
 
   .type-cots {
@@ -652,25 +801,74 @@
     color: #0277bd !important;
     border-color: #81d4fa !important;
   }
-
   .workflow-badge {
-    padding: 0.25rem 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.375rem 0.75rem;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 500;
+    background: var(--background);
+    border: 1px solid var(--border);
+    height: 32px;
   }
 
   .workflow-purchase {
     background: #fff8e1;
     color: #f57f17;
+    border-color: #ffcc02;
+  }
+  .workflow-dropdown {
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.8125rem;
+    background: var(--background);
+    color: var(--text);
+    cursor: pointer;
+    height: 32px;
+  }
+
+  .workflow-dropdown.workflow-3d-print {
+    background: #e3f2fd;
+    color: #1565c0;
+    border-color: #90caf9;
+  }
+
+  .workflow-dropdown.workflow-laser-cut {
+    background: #fff3e0;
+    color: #ef6c00;
+    border-color: #ffcc02;
+  }
+
+  .workflow-dropdown.workflow-lathe {
+    background: #f3e5f5;
+    color: #7b1fa2;
+    border-color: #ce93d8;
+  }
+
+  .workflow-dropdown.workflow-mill {
+    background: #e8f5e8;
+    color: #388e3c;
+    border-color: #a5d6a7;
+  }
+
+  .workflow-dropdown.workflow-router {
+    background: #fce4ec;
+    color: #c2185b;
+    border-color: #f8bbd9;
   }
 
   .bounding-box {
     font-family: monospace;
     font-size: 0.75rem;
   }
-
   .no-data {
+    color: var(--secondary);
+    font-style: italic;
+  }
+
+  .no-stock {
     color: var(--secondary);
     font-style: italic;
   }
@@ -690,7 +888,6 @@
     opacity: 0.6;
     cursor: not-allowed;
   }
-
   select {
     padding: 0.375rem 0.5rem;
     border: 1px solid var(--border);
@@ -698,5 +895,6 @@
     font-size: 0.8125rem;
     background: white;
     cursor: pointer;
+    height: 32px;
   }
 </style>

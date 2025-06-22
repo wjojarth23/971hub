@@ -36,23 +36,40 @@
         .from('builds')
         .select(`
           *,
-          subsystems(name, onshape_url),
-          build_bom(
-            id,
-            part_name,
-            part_number,
-            part_type,
-            material,
-            workflow,
-            status,
-            added_to_parts_list,
-            quantity
-          )
+          subsystems(name, onshape_url)
         `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       builds = data || [];
+      
+      // Get parts data for each build
+      for (const build of builds) {
+        if (build.part_ids && build.part_ids.length > 0) {
+          // Get parts from parts table
+          const { data: partsData, error: partsError } = await supabase
+            .from('parts')
+            .select('*')
+            .in('id', build.part_ids);
+
+          if (!partsError) {
+            build.parts = partsData || [];
+          }
+
+          // Get purchasing data (COTS parts might be in purchasing table)
+          const { data: purchasingData, error: purchasingError } = await supabase
+            .from('purchasing')
+            .select('*')
+            .in('id', build.part_ids);
+
+          if (!purchasingError) {
+            build.purchasing = purchasingData || [];
+          }
+        } else {
+          build.parts = [];
+          build.purchasing = [];
+        }
+      }
       
       // Calculate stats and update build statuses
       buildStats = {
@@ -65,13 +82,11 @@
       // Update build statuses based on part completion
       for (const build of builds) {
         if (build.status !== 'assembled') {
-          const bom = build.build_bom || [];
-          if (bom.length > 0) {
+          const allParts = [...(build.parts || []), ...(build.purchasing || [])];
+          if (allParts.length > 0) {
             // Check if all parts are completed
-            const allPartsComplete = bom.every(part => 
-              part.part_type === 'COTS' ? 
-                (part.status === 'delivered' || part.status === 'ordered') : 
-                part.status === 'manufactured'
+            const allPartsComplete = allParts.every(part => 
+              part.status === 'complete' || part.status === 'delivered'
             );
             
             // Update build status if needed
@@ -82,7 +97,7 @@
                 .update({ status: 'ready_to_assemble' })
                 .eq('id', build.id);
               build.status = 'ready_to_assemble';
-            } else if (!allPartsComplete && bom.some(part => part.status !== 'pending')) {
+            } else if (!allPartsComplete && allParts.some(part => part.status !== 'pending')) {
               // Update build to manufacturing if any parts are in progress
               await supabase
                 .from('builds')
@@ -122,34 +137,29 @@
       alert('Failed to mark as assembled');
     }
   }
-
   function getBuildProgress(build) {
-    const bom = build.build_bom || [];
-    if (bom.length === 0) return { percent: 0, manufactured: 0, total: 0, status: 'No parts' };
+    const allParts = [...(build.parts || []), ...(build.purchasing || [])];
+    if (allParts.length === 0) return { percent: 0, manufactured: 0, total: 0, status: 'No parts' };
     
-    const manufactured = bom.filter(item => 
-      item.part_type === 'COTS' ? 
-        (item.status === 'delivered' || item.status === 'ordered') : 
-        item.status === 'manufactured'
+    const manufactured = allParts.filter(item => 
+      item.status === 'complete' || item.status === 'delivered'
     ).length;
     
-    const inProgress = bom.filter(item => 
-      item.part_type === 'COTS' ? 
-        item.status === 'ordered' : 
-        (item.status === 'in-progress' || item.status === 'cammed')
+    const inProgress = allParts.filter(item => 
+      item.status === 'in-progress' || item.status === 'cammed' || item.status === 'ordered'
     ).length;
     
     let status = 'Requested';
-    if (manufactured === bom.length) {
+    if (manufactured === allParts.length) {
       status = 'Ready';
     } else if (inProgress > 0 || manufactured > 0) {
       status = 'Manufacturing';
     }
     
     return {
-      percent: Math.round((manufactured / bom.length) * 100),
+      percent: Math.round((manufactured / allParts.length) * 100),
       manufactured,
-      total: bom.length,
+      total: allParts.length,
       inProgress,
       status
     };
@@ -214,10 +224,13 @@
       <section class="section">
         <h2>All Builds</h2>
         {#if builds.length > 0}
-          <div class="builds-grid">
-            {#each builds as build}
+          <div class="builds-grid">            {#each builds as build}
               {@const progress = getBuildProgress(build)}
-              <div class="build-card status-{build.status}">                <div class="build-header">
+              <div class="build-card status-{build.status}" 
+                   on:click={() => goto(`/cad/build/${build.id}`)} 
+                   on:keydown={(e) => e.key === 'Enter' && goto(`/cad/build/${build.id}`)}
+                   role="button" 
+                   tabindex="0">                <div class="build-header">
                   <Package size={20} />
                   <div class="build-info">
                     <h3>{build.subsystems?.name || 'Unknown'} - {build.release_name}</h3>
@@ -250,32 +263,31 @@
                   {#if build.assembled_at}
                     <p><strong>Assembled:</strong> {new Date(build.assembled_at).toLocaleDateString()}</p>
                   {/if}
-                </div>
-
-                <!-- PARTS TABLE FOR EACH BUILD -->
-                {#if build.build_bom && build.build_bom.length > 0}
+                </div>                <!-- PARTS TABLE FOR EACH BUILD -->
+                {#if (build.parts && build.parts.length > 0) || (build.purchasing && build.purchasing.length > 0)}
                   <div class="parts-table-container" style="margin-top: 1.5rem;">
                     <table class="parts-table">
                       <thead>
                         <tr>
                           <th>Part Name</th>
-                          <th>Part Number</th>
+                          <th>Requester</th>
                           <th>Qty</th>
                           <th>Type</th>
                           <th>Material</th>
                           <th>Workflow</th>
                           <th>Status</th>
+                          <th>Kitting Location</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {#each build.build_bom as part}
+                        {#each build.parts || [] as part}
                           <tr>
-                            <td>{part.part_name}</td>
-                            <td>{part.part_number || '-'}</td>
+                            <td>{part.name}</td>
+                            <td>{part.requester}</td>
                             <td>{part.quantity}</td>
                             <td>
-                              <span class="part-type {part.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}">
-                                {part.part_type}
+                              <span class="part-type type-manufactured">
+                                Manufactured
                               </span>
                             </td>
                             <td>{part.material || '-'}</td>
@@ -286,31 +298,77 @@
                             </td>
                             <td>
                               <span class="status-badge status-{part.status}">
-                                {#if part.status === 'manufactured'}
-                                  ✓ Manufactured
+                                {#if part.status === 'complete'}
+                                  {#if part.delivered}
+                                    ✅ Complete & Delivered
+                                  {:else}
+                                    ⚠️ Complete (Not Delivered)
+                                  {/if}
                                 {:else if part.status === 'pending'}
                                   ⏳ Pending
-                                {:else if part.status === 'delivered'}
-                                  ✓ Delivered  
                                 {:else if part.status === 'in-progress'}
                                   🔄 In Progress
                                 {:else if part.status === 'cammed'}
                                   🔧 Cammed
-                                {:else if part.status === 'ordered'}
-                                  📦 Ordered
                                 {:else}
                                   {part.status}
                                 {/if}
                               </span>
+                            </td>
+                            <td>
+                              {#if part.kitting_bin}
+                                <span class="kitting-location">
+                                  📦 {part.kitting_bin}
+                                </span>
+                              {:else}
+                                <span class="no-kitting">No location assigned</span>
+                              {/if}
+                            </td>
+                          </tr>
+                        {/each}
+                        {#each build.purchasing || [] as part}
+                          <tr>
+                            <td>{part.name}</td>
+                            <td>{part.requester}</td>
+                            <td>{part.quantity}</td>
+                            <td>
+                              <span class="part-type type-cots">
+                                COTS
+                              </span>
+                            </td>
+                            <td>{part.material || '-'}</td>
+                            <td>
+                              <span class="workflow-badge workflow-purchase">
+                                Purchase
+                              </span>
+                            </td>
+                            <td>
+                              <span class="status-badge status-{part.status}">
+                                {#if part.status === 'delivered'}
+                                  ✅ Delivered
+                                {:else if part.status === 'ordered'}
+                                  📦 Ordered
+                                {:else if part.status === 'pending'}
+                                  ⏳ Pending
+                                {:else}
+                                  {part.status}
+                                {/if}
+                              </span>
+                            </td>
+                            <td>
+                              <span class="no-kitting">-</span>
                             </td>
                           </tr>
                         {/each}
                       </tbody>
                     </table>
                   </div>
-                {/if}
-
-                <div class="build-actions">
+                {/if}<div class="build-actions">
+                  <a href="/cad/build/{build.id}" class="btn btn-primary">
+                    <ExternalLink size={14} />
+                    View Details
+                  </a>
+                  
                   {#if build.subsystems?.onshape_url}
                     <a href={build.subsystems.onshape_url} target="_blank" class="btn btn-secondary">
                       <ExternalLink size={14} />
@@ -322,7 +380,7 @@
                   {#if build.status !== 'assembled'}
                     {@const progress = getBuildProgress(build)}
                     {#if progress.status === 'Ready'}
-                      <button class="btn btn-success" on:click={() => markAsAssembled(build.id)}>
+                      <button class="btn btn-success" on:click|stopPropagation={() => markAsAssembled(build.id)}>
                         <CheckCircle size={14} />
                         Build Finished
                       </button>
@@ -332,11 +390,17 @@
             </div>
           {/each}
         </div>
-      {:else}
-        <div class="empty-state">
+      {:else}        <div class="empty-state">
           <Package size={48} />
           <h3>No Builds Yet</h3>
-          <p>Create your first build from the CAD subsystems page</p>
+          <p>Builds are automatically created when you add parts from CAD subsystem BOMs.</p>
+          <p>To create your first build:</p>
+          <ol style="text-align: left; margin: 1rem 0;">
+            <li>Go to a CAD subsystem</li>
+            <li>Generate or view a BOM</li>
+            <li>Add parts to manufacturing or purchasing</li>
+            <li>A build will be created automatically</li>
+          </ol>
           <a href="/cad" class="btn btn-primary">
             Go to CAD Subsystems
           </a>
@@ -479,18 +543,19 @@
     flex-direction: column;
     gap: 1rem;
   }
-
   .build-card {
     background: var(--background);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1.5rem;
     transition: all 0.2s ease;
+    cursor: pointer;
   }
 
   .build-card:hover {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     border-color: var(--accent);
+    transform: translateY(-2px);
   }
 
   .build-header {
@@ -798,30 +863,55 @@
     color: #f57f17;
   }
 
-  .status-badge.status-manufactured,
+  .status-badge.status-manufactured {
+    background: #e8f5e8;
+    color: #2e7d32;
+  }
+
   .status-badge.status-delivered {
     background: #e8f5e8;
     color: #2e7d32;
   }
 
-  .status-badge.status-in-progress,
-  .status-badge.status-cammed {
+  .status-badge.status-in-progress {
     background: #e3f2fd;
     color: #1976d2;
   }
 
-  .status-badge.status-ordered {
+  .status-badge.status-cammed {
     background: #f3e5f5;
     color: #7b1fa2;
   }
 
-  .btn-success {
-    background: var(--success);
-    color: white;
+  .status-badge.status-ordered {
+    background: #fff3e0;
+    color: #f57c00;
   }
 
-  .btn-success:hover {
-    background: #229954;
+  .status-badge.status-complete {
+    background: #e8f5e8;
+    color: #2e7d32;
+  }
+
+  .kitting-location {
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    background: #e3f2fd;
+    color: #1976d2;
+    border: 1px solid #90caf9;
+  }
+
+  .no-kitting {
+    color: #9e9e9e;
+    font-style: italic;
+    font-size: 0.7rem;
+  }
+
+  .parts-table th:nth-child(8),
+  .parts-table td:nth-child(8) {
+    min-width: 120px;
   }
 
   @media (max-width: 768px) {
