@@ -1,9 +1,7 @@
-<script>
-  import '../app.css';
+<script>  import '../app.css';
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { trackUserAttendance } from '$lib/attendance.js';
   import { LogOut, Move3d, Hammer, Wrench, Receipt, Home, Briefcase, Router, Trophy } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
