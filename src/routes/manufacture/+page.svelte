@@ -9,6 +9,8 @@
   let searchTerm = '';
   let filterWorkflow = '';
   let filterStatus = '';
+  let toastMessage = '';
+  let showToast = false;
   
   const workflows = [
     { value: 'laser-cut', label: 'Laser Cut', icon: Zap },
@@ -82,6 +84,7 @@
       console.log('Downloading from Onshape API for part:', part.name);
       console.log('Part data:', {
         name: part.name,
+        workflow: part.workflow,
         file_format: part.file_format,
         onshape_document_id: part.onshape_document_id,
         onshape_element_id: part.onshape_element_id,
@@ -89,6 +92,12 @@
         onshape_wvm: part.onshape_wvm,
         onshape_wvmid: part.onshape_wvmid
       });
+
+      // Special handling for laser cutter - download SVG instead of STEP
+      if (part.workflow === 'laser-cut') {
+        await downloadSVGForLaser(part);
+        return;
+      }
 
       // Use the new translation workflow for both STL and STEP
       const action = 'translate-part';
@@ -106,6 +115,8 @@
       
       console.log('API parameters:', Object.fromEntries(params.entries()));
       console.log('Full API URL:', `/api/onshape?${params}`);
+      
+      showToastMessage('Download requested...');
       
       const response = await fetch(`/api/onshape?${params}`);
       
@@ -129,15 +140,17 @@
       document.body.removeChild(a);
       
       console.log('Onshape file downloaded successfully:', fileName);
+      showToastMessage(`${fileExt.toUpperCase()} file downloaded successfully!`);
     } catch (error) {
       console.error('Error downloading from Onshape:', error);
+      showToastMessage(`Error downloading file: ${error.message}`);
       throw error;
     }
   }
-
   async function downloadFromStorage(fileName, partId) {
     try {
       console.log('Downloading from storage bucket:', fileName);
+      showToastMessage('Download requested...');
       
       // Try to create signed URL for the filename as stored
       let { data, error } = await supabase.storage
@@ -162,8 +175,10 @@
       
       // Open the signed URL in a new tab
       window.open(data.signedUrl, '_blank');
+      showToastMessage('File download started!');
     } catch (error) {
       console.error('Error downloading from storage:', error);
+      showToastMessage(`Error downloading file: ${error.message}`);
       throw new Error(`Error downloading file: ${error.message}. The file may have been deleted or the filename may be incorrect.`);
     }
   }
@@ -392,6 +407,65 @@
     
     return matchesSearch && matchesWorkflow && matchesStatus;
   });
+
+  // Toast notification functions
+  function showToastMessage(message) {
+    toastMessage = message;
+    showToast = true;
+    
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+      showToast = false;
+    }, 3000);
+  }
+
+  // SVG download function for laser cutter
+  async function downloadSVGForLaser(part) {
+    try {
+      console.log('Downloading SVG for laser cutter, part:', part.name);
+      showToastMessage('Download requested - Converting to SVG...');
+      
+      // Build the API URL for SVG conversion
+      const params = new URLSearchParams({
+        action: 'convert-to-svg',
+        documentId: part.onshape_document_id,
+        elementId: part.onshape_element_id,
+        partId: part.onshape_part_id,
+        wvm: part.onshape_wvm,
+        wvmId: part.onshape_wvmid
+      });
+      
+      console.log('SVG API parameters:', Object.fromEntries(params.entries()));
+      console.log('Full SVG API URL:', `/api/onshape?${params}`);
+      
+      const response = await fetch(`/api/onshape?${params}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('SVG API Error Response:', errorData);
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+      
+      // Create blob and download SVG
+      const blob = await response.blob();
+      const fileName = `${part.name.replace(/[^a-zA-Z0-9]/g, '_')}.svg`;
+      
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      console.log('SVG file downloaded successfully:', fileName);
+      showToastMessage('SVG file downloaded successfully!');
+    } catch (error) {
+      console.error('Error downloading SVG:', error);
+      showToastMessage(`Error downloading SVG: ${error.message}`);
+    }
+  }
 </script>
 
 <svelte:head>
@@ -490,10 +564,13 @@
           <p><strong>Quantity:</strong> {part.quantity || 1}x</p>          {#if part.material}
             <p><strong>Material:</strong> {part.material}</p>
           {/if}
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>
-          {#if part.source_type === 'onshape_api'}            <p><strong>Source:</strong> 
+          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>          {#if part.source_type === 'onshape_api'}            <p><strong>Source:</strong> 
               <span class="onshape-badge">
-                Onshape ({part.file_format === 'stl' ? 'STL' : 'STEP'})
+                {#if part.workflow === 'laser-cut'}
+                  SVG
+                {:else}
+                  Onshape ({part.file_format === 'stl' ? 'STL' : 'STEP'})
+                {/if}
               </span>
             </p>
             <p><strong>Version:</strong> {part.onshape_wvm}/{part.onshape_wvmid}</p>
@@ -502,7 +579,7 @@
                 on:click={() => downloadFile(part, part.status)}
                 style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
               >
-                Download {part.file_format === 'stl' ? 'STL' : 'STEP'} file
+                Download {part.workflow === 'laser-cut' ? 'SVG' : (part.file_format === 'stl' ? 'STL' : 'STEP')} file
               </button>
             </p>
           {:else if part.file_name}
@@ -651,6 +728,13 @@
         {/if}
       </div>
     {/each}
+  </div>
+{/if}
+
+<!-- Toast Notification -->
+{#if showToast}
+  <div class="toast">
+    {toastMessage}
   </div>
 {/if}
 
@@ -807,6 +891,33 @@
     font-style: italic;
   }
   
+  /* Toast Notification Styles */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--secondary);
+    color: var(--primary);
+    padding: 12px 24px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    font-weight: 500;
+    animation: slideUp 0.3s ease-out;
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+
   @media (max-width: 768px) {
     .filters {
       grid-template-columns: 1fr;
