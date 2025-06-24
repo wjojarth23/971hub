@@ -3,7 +3,8 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { LogOut, Move3d, Hammer, Wrench, Receipt, Home, Briefcase, Router } from 'lucide-svelte';
+  import { trackUserAttendance } from '$lib/attendance.js';
+  import { LogOut, Move3d, Hammer, Wrench, Receipt, Home, Briefcase, Router, Trophy } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   let user = null;
@@ -42,6 +43,13 @@
           : [String(authUser.user_metadata?.permissions || 'basic')]
       };      userStore.set(user);
       console.log('User set from auth data:', user);
+      
+      // Track attendance if user is accessing from an allowed external IP
+      try {
+        await trackUserAttendance(user.id);
+      } catch (attendanceError) {
+        console.error('Non-critical: Attendance tracking failed:', attendanceError);
+      }
     } catch (error) {
       console.error('Error loading user profile:', error);
       // Fallback to basic user info
@@ -102,6 +110,10 @@
         </a>        <a href="/manufacture/router" class="nav-link" class:active={isActive('/manufacture/router')}>
           <Router size={18} />
           Router
+        </a>
+        <a href="/attendance" class="nav-link" class:active={isActive('/attendance')}>
+          <Trophy size={18} />
+          Attendance
         </a>
       </nav>
 
