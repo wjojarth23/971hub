@@ -475,7 +475,11 @@
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
   <h1>Parts List</h1>
   <div style="display: flex; gap: 10px;">
-    <a href="/create" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
+    <a href="/manufacture/laser" class="btn btn-laser" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
+      <Zap size={16} />
+      Laser Cutter
+    </a>
+    <a href="/manufacture/create" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
       <Upload size={16} />
       Create New Part
     </a>
@@ -739,6 +743,22 @@
 {/if}
 
 <style>
+  .btn-laser {
+    background: #ff6b35;
+    color: white;
+    border: 1px solid #ff6b35;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+  
+  .btn-laser:hover {
+    background: #e55a2b;
+    border-color: #e55a2b;
+    transform: translateY(-1px);
+  }
+
   .filters {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;
