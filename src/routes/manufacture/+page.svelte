@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { Search, Filter, Clock, CheckCircle, Truck, Package, Download, Zap, Wrench, FileText, Upload } from 'lucide-svelte';
-  
+  import DataTable from '$lib/components/DataTable.svelte';
+    
   let parts = [];
   let filteredParts = [];
   let loading = true;
@@ -11,6 +12,8 @@
   let filterStatus = '';
   let toastMessage = '';
   let showToast = false;
+  let selectedPart = null;
+  let showActionsModal = false;
   
   const workflows = [
     { value: 'laser-cut', label: 'Laser Cut', icon: Zap },
@@ -260,6 +263,7 @@
       
       if (error) throw error;
       await loadParts();
+      showActionsModal = false;
     } catch (error) {
       console.error('Error updating part status:', error);
       alert('Error updating part status. Please try again.');
@@ -285,10 +289,21 @@
       
       if (error) throw error;
       await loadParts();
+      showActionsModal = false;
     } catch (error) {
       console.error('Error completing part:', error);
       alert('Error completing part. Please try again.');
     }
+  }
+
+  function openActionsModal(part) {
+    selectedPart = part;
+    showActionsModal = true;
+  }
+
+  function closeActionsModal() {
+    selectedPart = null;
+    showActionsModal = false;
   }
 
   function getWorkflowLabel(workflow) {
@@ -472,266 +487,339 @@
   <title>Parts List - Manufacturing Management</title>
 </svelte:head>
 
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-  <h1>Parts List</h1>
-  <div style="display: flex; gap: 10px;">
-    <a href="/manufacture/laser" class="btn btn-laser" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
-      <Zap size={16} />
-      Laser Cutter
-    </a>
-    <a href="/manufacture/create" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
-      <Upload size={16} />
-      Create New Part
-    </a>
-    <button
-      class="btn btn-secondary"
-      on:click={exportToCSV}
-      style="display: flex; align-items: center; gap: 8px;"
-    >
-      <Download size={16} />
-      Export CSV
-    </button>
-  </div>
-</div>
-
-<div class="card">
-  <div class="filters">
-    <div class="form-group">
-      <label class="form-label">
-        <Search size={16} />
-        Search
-      </label>
-      <input
-        type="text"
-        class="form-input"
-        placeholder="Search by name, requester, or project ID..."
-        bind:value={searchTerm}
-      />
-    </div>
-    
-    <div class="form-group">
-      <label class="form-label">
-        <Filter size={16} />
-        Workflow
-      </label>
-      <select class="form-select" bind:value={filterWorkflow}>
-        <option value="">All Workflows</option>
-        {#each workflows as workflow}
-          <option value={workflow.value}>{workflow.label}</option>
-        {/each}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label class="form-label">
-        <Filter size={16} />
-        Status
-      </label>
-      <select class="form-select" bind:value={filterStatus}>
-        <option value="">All Statuses</option>
-        {#each statuses as status}
-          <option value={status.value}>{status.label}</option>
-        {/each}
-      </select>
-    </div>
-  </div>
-</div>
+<!-- Toolbar and filters moved into a single block for DataTable toolbar slot -->
+<!-- Remove extra .card container and margin-bottom from toolbar -->
+<!-- Pass as slot="toolbar" to DataTable below -->
 
 {#if loading}
-  <div class="card">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
     <p>Loading parts...</p>
   </div>
 {:else if filteredParts.length === 0}
-  <div class="card">
-    <p>No parts found. {parts.length === 0 ? 'Create your first part!' : 'Try adjusting your filters.'}</p>
+  <div class="empty-state">
+    <div class="empty-icon">
+      <Package size={48} />
+    </div>
+    <h3>No parts found</h3>
+    <p>{parts.length === 0 ? 'Create your first part to get started!' : 'Try adjusting your filters or search terms.'}</p>
+    {#if parts.length === 0}
+      <a href="/manufacture/create" class="btn btn-primary">
+        <Upload size={16} />
+        Create New Part
+      </a>
+    {/if}
   </div>
 {:else}
-  <div class="parts-grid">
-    {#each filteredParts as part (part.id)}
-      <div class="card part-card">
-        <div class="part-header">
-          <div class="part-info">
-            <h3>{part.name}</h3>
-            <div class="workflow-badge">
-              <svelte:component this={getWorkflowIcon(part.workflow)} size={16} />
-              {getWorkflowLabel(part.workflow)}
+  <DataTable
+    bare
+    {loading}
+    rows={filteredParts}
+    columns={[
+      { label: 'Part Name', accessor: 'name' },
+      { label: 'Requester', accessor: 'requester' },
+      { label: 'Project', accessor: 'project_id' },
+      { label: 'Type', accessor: 'workflow' },
+      { label: 'Qty', accessor: 'quantity' },
+      { label: 'Material', accessor: 'material' },
+      { label: 'Status', accessor: 'status' },
+      { label: 'Created', accessor: 'created_at' },
+      { label: 'Download', accessor: 'download' },
+      { label: '', accessor: 'actions' }
+    ]}
+  >
+    <svelte:fragment slot="toolbar">
+      <div class="page-header">
+        <div class="page-title">
+          <h1>Parts Manufacturing</h1>
+          <p class="page-subtitle">Manage and track manufacturing requests</p>
+        </div>
+        <div class="page-actions">
+          <a href="/manufacture/laser" class="btn btn-laser">
+            <Zap size={16} />
+            Laser Cutter
+          </a>
+          <a href="/manufacture/create" class="btn btn-primary">
+            <Upload size={16} />
+            Create Part
+          </a>
+          <button class="btn btn-secondary" on:click={exportToCSV}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
+      </div>
+      
+      <div class="filters-container">
+        <div class="filter-group">
+          <label class="filter-label">
+            <Search size={14} />
+            Search
+          </label>
+          <input
+            type="text"
+            class="filter-input"
+            placeholder="Search parts, requesters, or projects..."
+            bind:value={searchTerm}
+          />
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            <Filter size={14} />
+            Type
+          </label>
+          <select class="filter-select" bind:value={filterWorkflow}>
+            <option value="">All Types</option>
+            {#each workflows as workflow}
+              <option value={workflow.value}>{workflow.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">
+            <CheckCircle size={14} />
+            Status
+          </label>
+          <select class="filter-select" bind:value={filterStatus}>
+            <option value="">All Statuses</option>
+            {#each statuses as status}
+              <option value={status.value}>{status.label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="filter-stats">
+          <span class="stat-item">
+            {filteredParts.length} of {parts.length} parts
+          </span>
+        </div>
+      </div>
+    </svelte:fragment>
+    <svelte:fragment slot="cell" let:row let:rowIndex let:col>
+      {#if col.accessor === 'workflow'}
+        <div class="workflow-cell">
+          <svelte:component this={getWorkflowIcon(row.workflow)} size={14} />
+          <span>{getWorkflowLabel(row.workflow)}</span>
+        </div>
+      {:else if col.accessor === 'status'}
+        <span class="status-badge status-{row.status}">
+          {getStatusDisplay(row)}
+        </span>
+      {:else if col.accessor === 'created_at'}
+        <span class="date-cell">{formatDate(row.created_at)}</span>
+      {:else if col.accessor === 'quantity'}
+        <span class="quantity-cell">{row.quantity || 1}</span>
+      {:else if col.accessor === 'material'}
+        <span class="material-cell" title={row.material || 'Not specified'}>
+          {row.material || 'Not specified'}
+        </span>
+      {:else if col.accessor === 'download'}
+        <div class="download-cell">
+          {#if row.source_type === 'onshape_api'}
+            <button
+              class="download-link"
+              on:click={() => downloadFile(row, row.status)}
+              title="Download {row.workflow === 'laser-cut' ? 'SVG' : (row.file_format === 'stl' ? 'STL' : 'STEP')} file"
+            >
+              <Download size={14} />
+              {row.workflow === 'laser-cut' ? 'SVG' : (row.file_format === 'stl' ? 'STL' : 'STEP')}
+            </button>
+          {:else if row.file_name}
+            <button
+              class="download-link"
+              on:click={() => downloadFromStorage(row.file_name, row.id)}
+              title="Download {row.file_name}"
+            >
+              <Download size={14} />
+              File
+            </button>
+          {/if}
+          {#if row.gcode_file_name}
+            <a
+              href={row.gcode_file_url}
+              target="_blank"
+              class="download-link secondary"
+              title="Download G-code file"
+            >
+              <FileText size={14} />
+              G-code
+            </a>
+          {/if}
+        </div>
+      {:else if col.accessor === 'actions'}
+        <button 
+          class="actions-button" 
+          on:click={() => openActionsModal(row)}
+          title="View actions for {row.name}"
+        >
+          <Wrench size={14} />
+          Actions
+        </button>
+      {:else if col.accessor === 'name'}
+        <div class="name-cell">
+          <span class="part-name" title={row.name}>{row.name}</span>
+          {#if row.source_type === 'onshape_api'}
+            <span class="onshape-badge" title="From Onshape">OS</span>
+          {/if}
+        </div>
+      {:else}
+        <span title={row[col.accessor] || ''}>{row[col.accessor] || ''}</span>
+      {/if}
+    </svelte:fragment>
+  </DataTable>
+{/if}
+
+<!-- Actions Modal -->
+{#if showActionsModal && selectedPart}
+  <div class="modal-backdrop" on:click={closeActionsModal} role="presentation"></div>
+  <div class="modal actions-modal" role="dialog" aria-labelledby="modal-title">
+    <div class="modal-header">
+      <h2 id="modal-title">Actions for {selectedPart.name}</h2>
+      <button class="modal-close" on:click={closeActionsModal} aria-label="Close modal">
+        &times;
+      </button>
+    </div>
+    <div class="modal-body">
+      {#if selectedPart.status === 'pending'}
+        <div class="action-section">
+          <h3>Start Manufacturing</h3>
+          <p>Mark this part as in progress to begin work.</p>
+          <button
+            class="btn btn-primary"
+            on:click={() => updatePartStatus(selectedPart.id, 'in-progress')}
+          >
+            <Clock size={16} />
+            Start Work
+          </button>
+        </div>
+      {:else if selectedPart.status === 'in-progress'}
+        {#if selectedPart.workflow === 'router'}
+          <div class="action-section">
+            <h3>Router Workflow</h3>
+            <div class="workflow-steps">
+              <div class="step">
+                <span class="step-number">1</span>
+                <span class="step-text">Download STEP file from table</span>
+              </div>
+              <div class="step">
+                <span class="step-number">2</span>
+                <span class="step-text">Process in CAM software</span>
+              </div>
+              <div class="step">
+                <span class="step-number">3</span>
+                <span class="step-text">Upload G-code file below</span>
+              </div>
+            </div>
+            <div class="gcode-upload-section">
+              <label class="upload-label" for="gcode-upload-modal">Upload G-code File:</label>
+              <div class="file-upload-area"
+                on:click={() => document.getElementById(`gcode-upload-modal`).click()}
+                on:dragover={handleDragOver}
+                on:dragleave={handleDragLeave}
+                on:drop={(e) => handleGcodeDrop(e, selectedPart.id)}
+                role="button"
+                tabindex="0"
+                on:keydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    document.getElementById(`gcode-upload-modal`).click();
+                  }
+                }}>
+                <input
+                  id="gcode-upload-modal"
+                  type="file"
+                  accept=".gcode,.nc,.cnc,.tap,.ngc"
+                  class="file-input-hidden"
+                  on:change={(e) => handleGcodeFileUpload(e, selectedPart.id)}
+                />
+                <Upload size={24} />
+                <span class="upload-text">Drop G-code file or click to browse</span>
+                <span class="file-info">Accepts: .gcode, .nc, .cnc, .tap, .ngc</span>
+              </div>
             </div>
           </div>
-          <div class="status-badge status-{part.status}">
-            {getStatusDisplay(part)}
-          </div>
-        </div>
-        
-        <div class="part-details">
-          <p><strong>Requester:</strong> {part.requester}</p>
-          <p><strong>Project ID:</strong> {part.project_id}</p>
-          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>          {#if part.material}
-            <p><strong>Material:</strong> {part.material}</p>
-          {/if}
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>          {#if part.source_type === 'onshape_api'}            <p><strong>Source:</strong> 
-              <span class="onshape-badge">
-                {#if part.workflow === 'laser-cut'}
-                  SVG
-                {:else}
-                  Onshape ({part.file_format === 'stl' ? 'STL' : 'STEP'})
-                {/if}
-              </span>
-            </p>
-            <p><strong>Version:</strong> {part.onshape_wvm}/{part.onshape_wvmid}</p>
-            <p>              <button 
-                class="file-link download-btn" 
-                on:click={() => downloadFile(part, part.status)}
-                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
-              >
-                Download {part.workflow === 'laser-cut' ? 'SVG' : (part.file_format === 'stl' ? 'STL' : 'STEP')} file
-              </button>
-            </p>
-          {:else if part.file_name}
-            <p><strong>File:</strong> 
-              <button 
-                class="file-link" 
-                on:click={() => downloadFromStorage(part.file_name, part.id)}
-                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
-              >
-                Download {part.file_name}
-              </button>
-            </p>
-          {/if}
-          {#if part.gcode_file_name}
-            <p><strong>G-code File:</strong> 
-              <a 
-                href={part.gcode_file_url}
-                target="_blank"
-                class="file-link"
-              >
-                Download {part.gcode_file_name}
-              </a>
-            </p>
-          {/if}
-          {#if part.kitting_bin}
-            <p><strong>Kitting Bin:</strong> {part.kitting_bin}</p>
-          {/if}
-          {#if part.delivered}
-            <p><strong>Status:</strong> Delivered</p>
-          {/if}
-        </div>
-        
-        {#if part.status === 'pending' || part.status === 'in-progress' || (part.status === 'cammed' && part.workflow === 'router')}
-          <div class="part-actions">
-            {#if part.status === 'pending'}
+        {:else}
+          <div class="action-section">
+            <h3>Complete Part</h3>
+            <p>Mark this part as complete and specify delivery method.</p>
+            <div class="completion-actions">
               <button
-                class="btn btn-secondary"
-                on:click={() => updatePartStatus(part.id, 'in-progress')}
+                class="btn btn-primary"
+                on:click={() => completePart(selectedPart.id, 'delivered')}
               >
-                <Clock size={16} />
-                Start Work
+                <Truck size={16} />
+                Mark as Delivered
               </button>
-            {:else if part.status === 'in-progress'}
-              {#if part.workflow === 'router'}
-                <div class="router-cam-section">
-                  <p><strong>Step 1:</strong> Download STEP file above</p>
-                  <p><strong>Step 2:</strong> Upload G-code file after CAM processing</p>
-                    <div class="gcode-upload">
-                    <label class="form-label" for="gcode-upload-{part.id}">Upload G-code File:</label>
-                    <div class="file-upload-area" 
-                         on:click={() => document.getElementById(`gcode-upload-${part.id}`).click()}
-                         on:dragover={handleDragOver}
-                         on:dragleave={handleDragLeave}
-                         on:drop={(e) => handleGcodeDrop(e, part.id)}
-                         role="button"
-                         tabindex="0"
-                         on:keydown={(e) => {
-                           if (e.key === 'Enter' || e.key === ' ') {
-                             document.getElementById(`gcode-upload-${part.id}`).click();
-                           }
-                         }}>
-                      <input
-                        id="gcode-upload-{part.id}"
-                        type="file"
-                        accept=".gcode,.nc,.cnc,.tap"
-                        class="file-input-hidden"
-                        on:change={(e) => handleGcodeFileUpload(e, part.id)}
-                      />
-                      <Upload size={32} />
-                      <span class="upload-text">Drop your G-code file here or click to browse</span>
-                      <span class="file-info">Only G-code files are accepted (.gcode, .nc, .cnc, .tap)</span>
-                    </div>
-                  </div>
-                </div>
-              {:else}
-                <div class="complete-actions">
-                  <button
-                    class="btn"
-                    on:click={() => completePart(part.id, 'delivered')}
-                  >
-                    <Truck size={16} />
-                    Mark Delivered
-                  </button>
-                  <div class="kitting-action">
-                    <input
-                      type="text"
-                      placeholder="Kitting Bin ID"
-                      class="form-input kitting-input"
-                      on:keydown={(e) => {
-                        if (e.key === 'Enter' && e.target.value.trim()) {
-                          completePart(part.id, 'kitting-bin', e.target.value.trim());
-                        }
-                      }}
-                    />
-                    <button
-                      class="btn btn-secondary"
-                      on:click={(e) => {
-                        const input = e.target.previousElementSibling;
-                        if (input.value.trim()) {
-                          completePart(part.id, 'kitting-bin', input.value.trim());
-                        }
-                      }}
-                    >
-                      <Package size={16} />
-                      To Bin
-                    </button>
-                  </div>
-                </div>
-              {/if}
-            {:else if part.status === 'cammed' && part.workflow === 'router'}
-              <div class="complete-actions">
+              <div class="kitting-section">
+                <input
+                  type="text"
+                  placeholder="Enter Kitting Bin ID"
+                  class="kitting-input"
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      completePart(selectedPart.id, 'kitting-bin', e.target.value.trim());
+                    }
+                  }}
+                />
                 <button
-                  class="btn"
-                  on:click={() => completePart(part.id, 'delivered')}
+                  class="btn btn-secondary"
+                  on:click={(e) => {
+                    const input = e.target.parentElement.querySelector('.kitting-input');
+                    if (input.value.trim()) {
+                      completePart(selectedPart.id, 'kitting-bin', input.value.trim());
+                    }
+                  }}
                 >
-                  <Truck size={16} />
-                  Mark Delivered
+                  <Package size={16} />
+                  To Kitting Bin
                 </button>
-                <div class="kitting-action">
-                  <input
-                    type="text"
-                    placeholder="Kitting Bin ID"
-                    class="form-input kitting-input"
-                    on:keydown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        completePart(part.id, 'kitting-bin', e.target.value.trim());
-                      }
-                    }}
-                  />
-                  <button
-                    class="btn btn-secondary"
-                    on:click={(e) => {
-                      const input = e.target.previousElementSibling;
-                      if (input.value.trim()) {
-                        completePart(part.id, 'kitting-bin', input.value.trim());
-                      }
-                    }}
-                  >
-                    <Package size={16} />
-                    To Bin
-                  </button>
-                </div>
               </div>
-            {/if}
+            </div>
           </div>
         {/if}
-      </div>
-    {/each}
+      {:else if selectedPart.status === 'cammed' && selectedPart.workflow === 'router'}
+        <div class="action-section">
+          <h3>Complete Machining</h3>
+          <p>G-code uploaded. Mark as complete and specify delivery method.</p>
+          <div class="completion-actions">
+            <button
+              class="btn btn-primary"
+              on:click={() => completePart(selectedPart.id, 'delivered')}
+            >
+              <Truck size={16} />
+              Mark as Delivered
+            </button>
+            <div class="kitting-section">
+              <input
+                type="text"
+                placeholder="Enter Kitting Bin ID"
+                class="kitting-input"
+                on:keydown={(e) => {
+                  if (e.key === 'Enter' && e.target.value.trim()) {
+                    completePart(selectedPart.id, 'kitting-bin', e.target.value.trim());
+                  }
+                }}
+              />
+              <button
+                class="btn btn-secondary"
+                on:click={(e) => {
+                  const input = e.target.parentElement.querySelector('.kitting-input');
+                  if (input.value.trim()) {
+                    completePart(selectedPart.id, 'kitting-bin', input.value.trim());
+                  }
+                }}
+              >
+                <Package size={16} />
+                To Kitting Bin
+              </button>
+            </div>
+          </div>
+        </div>
+      {:else}
+        <div class="action-section">
+          <h3>No Actions Available</h3>
+          <p>This part is complete or no actions are currently available.</p>
+        </div>
+      {/if}
+    </div>
   </div>
 {/if}
 
@@ -743,137 +831,402 @@
 {/if}
 
 <style>
+  /* Page Layout */
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .page-title h1 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--gray-900);
+  }
+
+  .page-subtitle {
+    margin: 0;
+    color: var(--gray-600);
+    font-size: 0.875rem;
+  }
+
+  .page-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  /* Filters */
+  .filters-container {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr auto;
+    gap: 1rem;
+    align-items: end;
+    padding: 1rem 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .filter-label {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--gray-600);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+  }
+
+  .filter-input,
+  .filter-select {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    background: var(--primary);
+    color: var(--text);
+    transition: all 0.2s ease;
+  }
+
+  .filter-input:focus,
+  .filter-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(241, 195, 49, 0.1);
+  }
+
+  .filter-stats {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 0;
+  }
+
+  .stat-item {
+    font-size: 0.75rem;
+    color: var(--gray-500);
+    font-weight: 500;
+  }
+
+  /* Loading and Empty States */
+  .loading-state,
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    text-align: center;
+  }
+
+  .loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--gray-200);
+    border-top: 3px solid var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+
+  .empty-icon {
+    color: var(--gray-400);
+    margin-bottom: 1rem;
+  }
+
+  .empty-state h3 {
+    margin: 0 0 0.5rem 0;
+    color: var(--gray-900);
+    font-size: 1.125rem;
+  }
+
+  .empty-state p {
+    margin: 0 0 1.5rem 0;
+    color: var(--gray-600);
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  /* Table Cell Styles */
+  .workflow-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--gray-700);
+    font-weight: 500;
+  }
+
+  .name-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .part-name {
+    font-weight: 500;
+    color: var(--gray-900);
+  }
+
+  .onshape-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: #f1c331;
+    color: #1f2937;
+    border-radius: 4px;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .date-cell {
+    color: var(--gray-600);
+    font-size: 0.875rem;
+  }
+
+  .quantity-cell {
+    font-weight: 500;
+    color: var(--gray-700);
+  }
+
+  .material-cell {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--gray-600);
+    font-size: 0.875rem;
+  }
+
+  .download-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .download-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    background: none;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .download-link:hover {
+    background: var(--accent);
+    color: var(--gray-900);
+  }
+
+  .download-link.secondary {
+    border-color: var(--gray-300);
+    color: var(--gray-600);
+  }
+
+  .download-link.secondary:hover {
+    background: var(--gray-100);
+    color: var(--gray-700);
+  }
+
+  .actions-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    background: var(--gray-100);
+    border: 1px solid var(--gray-300);
+    border-radius: 6px;
+    color: var(--gray-700);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .actions-button:hover {
+    background: var(--gray-200);
+    border-color: var(--gray-400);
+    color: var(--gray-800);
+  }
+
+  /* Button Styles */
   .btn-laser {
     background: #ff6b35;
     color: white;
     border: 1px solid #ff6b35;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    font-weight: 500;
-    transition: all 0.2s ease;
   }
   
   .btn-laser:hover {
     background: #e55a2b;
     border-color: #e55a2b;
-    transform: translateY(-1px);
   }
 
-  .filters {
-    display: grid;
-    grid-template-columns: 2fr 1fr 1fr;
-    gap: 1rem;
-    margin-bottom: 1rem;
+  /* Modal Styles */
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    backdrop-filter: blur(2px);
   }
-  
-  .parts-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-    gap: 1rem;
+
+  .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--primary);
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    z-index: 1001;
+    width: 90vw;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
-  
-  .part-card {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-  }
-  
-  .part-header {
+
+  .modal-header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
+    align-items: center;
+    padding: 1.5rem 1.5rem 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
   }
-  
-  .part-info h3 {
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--gray-900);
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--gray-400);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: color 0.2s ease;
+  }
+
+  .modal-close:hover {
+    color: var(--gray-600);
+  }
+
+  .modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+  }
+
+  .action-section {
+    margin-bottom: 1.5rem;
+  }
+
+  .action-section:last-child {
+    margin-bottom: 0;
+  }
+
+  .action-section h3 {
     margin: 0 0 0.5rem 0;
-    color: var(--secondary);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--gray-900);
   }
-  
-  .workflow-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: var(--background);
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
+
+  .action-section p {
+    margin: 0 0 1rem 0;
+    color: var(--gray-600);
     font-size: 0.875rem;
-    font-weight: 500;
-    border: 1px solid var(--border);
   }
-  
-  .part-details {
-    margin-bottom: 1rem;
-  }
-  
-  .part-details p {
-    margin: 0.25rem 0;
-    font-size: 0.9rem;
-  }
-  
-  .file-link {
-    color: var(--accent);
-    text-decoration: none;
-    font-weight: 500;
-  }
-    .file-link:hover {
-    text-decoration: underline;
-  }
-  
-  .onshape-badge {
-    display: inline-flex;
-    align-items: center;
-    background: #f1c331;
-    color: #333;
-    padding: 0.125rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-  
-  .download-btn {
-    font-weight: 600;
-  }
-  
-  .part-actions {
-    border-top: 1px solid var(--border);
-    padding-top: 1rem;
-  }
-  
-  .complete-actions {
+
+  .workflow-steps {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    margin-bottom: 1.5rem;
   }
-  
-  .kitting-action {
+
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .step-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: var(--accent);
+    color: var(--gray-900);
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .step-text {
+    color: var(--gray-700);
+    font-size: 0.875rem;
+  }
+
+  .completion-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .kitting-section {
     display: flex;
     gap: 0.5rem;
+    align-items: stretch;
   }
-  
+
   .kitting-input {
     flex: 1;
     margin: 0;
   }
-  
-  .router-cam-section {
+
+  .gcode-upload-section {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
   }
-  
-  .router-cam-section p {
-    margin: 0;
-    font-size: 0.9rem;
-    color: var(--text);
+
+  .upload-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--gray-700);
   }
-  
-  .gcode-upload {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  
+
   .file-upload-area {
     display: flex;
     flex-direction: column;
@@ -881,49 +1234,49 @@
     justify-content: center;
     padding: 2rem;
     border: 2px dashed var(--border);
-    border-radius: 4px;
-    background: var(--background);
+    border-radius: 8px;
+    background: var(--gray-50);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s ease;
     text-align: center;
     gap: 0.75rem;
   }
-  
+
   .file-upload-area:hover,
   .file-upload-area.active {
     border-color: var(--accent);
-    background: rgba(241, 195, 49, 0.1);
+    background: rgba(241, 195, 49, 0.05);
   }
-  
+
   .file-input-hidden {
     display: none;
   }
-  
+
   .upload-text {
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 500;
-    color: var(--secondary);
+    color: var(--gray-700);
   }
-  
+
   .file-info {
-    font-size: 0.8rem;
-    color: #666;
-    font-style: italic;
+    font-size: 0.75rem;
+    color: var(--gray-500);
   }
-  
-  /* Toast Notification Styles */
+
+  /* Toast Notification */
   .toast {
     position: fixed;
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--secondary);
+    background: var(--gray-900);
     color: var(--primary);
-    padding: 12px 24px;
+    padding: 0.75rem 1.5rem;
     border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     z-index: 1000;
     font-weight: 500;
+    font-size: 0.875rem;
     animation: slideUp 0.3s ease-out;
   }
 
@@ -938,16 +1291,50 @@
     }
   }
 
+  /* Responsive Design */
+  @media (max-width: 1024px) {
+    .filters-container {
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .filter-stats {
+      grid-column: 1 / -1;
+      justify-content: flex-start;
+    }
+  }
+
   @media (max-width: 768px) {
-    .filters {
+    .page-header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 1rem;
+    }
+
+    .page-actions {
+      justify-content: stretch;
+    }
+
+    .page-actions > * {
+      flex: 1;
+      justify-content: center;
+    }
+
+    .filters-container {
       grid-template-columns: 1fr;
     }
-    
-    .parts-grid {
-      grid-template-columns: 1fr;
+
+    .modal {
+      width: 95vw;
+      max-height: 90vh;
     }
-    
-    .kitting-action {
+
+    .modal-header,
+    .modal-body {
+      padding: 1rem;
+    }
+
+    .kitting-section {
       flex-direction: column;
     }
   }

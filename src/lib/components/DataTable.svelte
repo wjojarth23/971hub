@@ -14,10 +14,13 @@
 
   export let loading: boolean = false;
 
+  // If true, removes background, border, and padding from container
+  export let bare: boolean = false;
+
   const dispatch = createEventDispatcher();
 </script>
 
-<div class="datatable-container">
+<div class="datatable-container {bare ? 'bare' : ''}">
   <div class="datatable-toolbar">
     <slot name="toolbar" />
   </div>
@@ -68,50 +71,73 @@
   margin: 0 auto;
   background: var(--primary, #fff);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   border: 1px solid var(--border, #e1e5e9);
-  padding-bottom: 1rem;
+}
+
+.datatable-container.bare {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
 }
 
 .datatable-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1.25rem 1.5rem 0.5rem 1.5rem;
+  padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border, #e1e5e9);
-  min-height: 56px;
-  gap: 1rem;
+  background: var(--primary, #fff);
+  border-radius: 8px 8px 0 0;
 }
 
 .datatable-table-container {
   overflow-x: auto;
-  padding: 0 1.5rem;
+  overflow-y: visible;
+  width: 100%;
 }
 
 .datatable-table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.95rem;
+  min-width: 800px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9rem;
   background: var(--primary, #fff);
+  table-layout: auto;
 }
 
 .datatable-table th,
 .datatable-table td {
-  padding: 0.75rem 0.5rem;
+  padding: 0.75rem 0.75rem;
   text-align: left;
   border-bottom: 1px solid var(--border, #e1e5e9);
   vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .datatable-table th {
-  background: var(--background, #f8f9fa);
+  background: #f8fafb;
   font-weight: 600;
-  color: var(--text, #2c3e50);
-  font-size: 1rem;
+  color: var(--text, #374151);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
-.datatable-table tr:hover td {
-  background: #f8f9fa;
+.datatable-table tr:last-child td {
+  border-bottom: none;
+}
+
+.datatable-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.datatable-table tbody tr:hover {
+  background-color: #f9fafb;
 }
 
 .datatable-empty {

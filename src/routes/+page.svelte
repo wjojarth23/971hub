@@ -119,65 +119,93 @@
 {:else if user}
   <!-- User Dashboard -->
   <div class="dashboard-container">
-    <div class="user-welcome">
-      <h2>Welcome back, {user.full_name || user.email}!</h2>
-      <div class="user-info">
-        <div class="info-card">
+    <div class="dashboard-header">
+      <h1>Welcome back, {user.full_name || user.email}!</h1>
+      <p class="dashboard-subtitle">Your manufacturing workflow dashboard</p>
+    </div>
+    
+    <div class="user-info-grid">
+      <div class="info-card">
+        <div class="info-icon">
           <User size={20} />
-          <div>
-            <strong>Name:</strong> {user.full_name || 'Not set'}
-          </div>
         </div>
-        <div class="info-card">
+        <div class="info-content">
+          <span class="info-label">Name</span>
+          <span class="info-value">{user.full_name || 'Not set'}</span>
+        </div>
+      </div>
+      <div class="info-card">
+        <div class="info-icon">
           <Mail size={20} />
-          <div>
-            <strong>Email:</strong> {user.email}
-          </div>
-        </div>        <div class="info-card">
+        </div>
+        <div class="info-content">
+          <span class="info-label">Email</span>
+          <span class="info-value">{user.email}</span>
+        </div>
+      </div>
+      <div class="info-card">
+        <div class="info-icon">
           <Shield size={20} />
-          <div>
-            <strong>Role:</strong> 
+        </div>
+        <div class="info-content">
+          <span class="info-label">Role</span>
+          <span class="info-value">
             {#if user.role === 'pending'}
-              <span class="pending-status">Pending Assignment</span>
+              <span class="status-badge status-pending">Pending Assignment</span>
             {:else}
               {user.role || 'Not assigned'}
             {/if}
-          </div>
+          </span>
         </div>
-        <div class="info-card">
+      </div>
+      <div class="info-card">
+        <div class="info-icon">
           <Shield size={20} />
-          <div>
-            <strong>Permissions:</strong> 
+        </div>
+        <div class="info-content">
+          <span class="info-label">Permissions</span>
+          <span class="info-value">
             {#if user.permissions === 'none' || user.role === 'pending'}
-              <span class="pending-status">Awaiting Admin Approval</span>
+              <span class="status-badge status-pending">Awaiting Approval</span>
             {:else}
               {user.permissions || 'Not assigned'}
             {/if}
-          </div>
+          </span>
         </div>
-      </div>    </div>
+      </div>
+    </div>
 
     {#if user.role === 'pending' || user.permissions === 'none'}
       <div class="pending-notice">
-        <AlertCircle size={20} />
-        <div>
+        <div class="notice-icon">
+          <AlertCircle size={24} />
+        </div>
+        <div class="notice-content">
           <h3>Account Pending Approval</h3>
           <p>Your account has been created successfully. An administrator needs to assign your role and permissions before you can access the manufacturing features. You'll receive an email notification once your account is approved.</p>
         </div>
       </div>
     {:else}
-      <div class="dashboard-actions">
-        <h3>Quick Actions</h3>
+      <div class="quick-actions">
+        <h2>Quick Actions</h2>
         <div class="action-grid">
           <a href="/manufacture" class="action-card">
-            <Briefcase size={24} />
-            <h4>Manufacturing</h4>
-            <p>Access manufacturing workflows and tasks</p>
+            <div class="action-icon">
+              <Briefcase size={28} />
+            </div>
+            <div class="action-content">
+              <h3>Manufacturing</h3>
+              <p>Manage manufacturing workflows and track production</p>
+            </div>
           </a>
           <a href="/cad" class="action-card">
-            <User size={24} />
-            <h4>CAD Design</h4>
-            <p>Work with CAD files and designs</p>
+            <div class="action-icon">
+              <User size={28} />
+            </div>
+            <div class="action-content">
+              <h3>CAD Design</h3>
+              <p>Work with CAD files and design documentation</p>
+            </div>
           </a>
         </div>
       </div>
@@ -514,99 +542,129 @@
   /* Dashboard Styles */
   .dashboard-container {
     max-width: 1200px;
-    margin: 2rem auto;
-    padding: 0 1rem;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
   }
 
   .dashboard-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .user-welcome {
-    background: var(--primary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 2rem;
     margin-bottom: 2rem;
   }
 
-  .user-welcome h2 {
-    margin: 0 0 1.5rem 0;
-    color: var(--secondary);
-    font-size: 1.5rem;
+  .dashboard-header h1 {
+    margin: 0 0 0.5rem 0;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--gray-900);
   }
 
-  .user-info {
+  .dashboard-subtitle {
+    margin: 0;
+    color: var(--gray-600);
+    font-size: 1rem;
+  }
+
+  .user-info-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 1rem;
+    margin-bottom: 2rem;
   }
 
   .info-card {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 1rem;
-    background: var(--background);
+    gap: 1rem;
+    padding: 1.5rem;
+    background: var(--primary);
     border: 1px solid var(--border);
-    border-radius: 6px;
-  }
-  .info-card div {
-    font-size: 0.9rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
-  .pending-status {
-    color: #f59e0b;
+  .info-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: var(--gray-100);
+    border-radius: 8px;
+    color: var(--gray-600);
+    flex-shrink: 0;
+  }
+
+  .info-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .info-label {
+    display: block;
+    font-size: 0.75rem;
     font-weight: 500;
-    font-style: italic;
+    color: var(--gray-500);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+    margin-bottom: 0.25rem;
+  }
+
+  .info-value {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--gray-900);
   }
 
   .pending-notice {
     display: flex;
     align-items: flex-start;
     gap: 1rem;
-    background: #fef3c7;
-    border: 1px solid #f59e0b;
+    background: #fef3cd;
+    border: 1px solid #fcd34d;
     border-radius: 8px;
     padding: 1.5rem;
     margin-bottom: 2rem;
-    color: #92400e;
   }
 
-  .pending-notice h3 {
+  .notice-icon {
+    color: #f59e0b;
+    flex-shrink: 0;
+  }
+
+  .notice-content h3 {
     margin: 0 0 0.5rem 0;
     color: #92400e;
-    font-size: 1.1rem;
+    font-size: 1.125rem;
+    font-weight: 600;
   }
 
-  .pending-notice p {
+  .notice-content p {
     margin: 0;
+    color: #92400e;
     line-height: 1.5;
   }
 
-  .dashboard-actions {
+  .quick-actions {
     margin-top: 2rem;
   }
 
-  .dashboard-actions h3 {
-    margin: 0 0 1rem 0;
-    color: var(--secondary);
-    font-size: 1.25rem;
+  .quick-actions h2 {
+    margin: 0 0 1.5rem 0;
+    color: var(--gray-900);
+    font-size: 1.5rem;
+    font-weight: 700;
   }
 
   .action-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 1.5rem;
   }
 
   .action-card {
-    display: block;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
     background: var(--primary);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -614,7 +672,7 @@
     text-decoration: none;
     color: inherit;
     transition: all 0.2s ease;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
   .action-card:hover {
@@ -623,16 +681,29 @@
     border-color: var(--accent);
   }
 
-  .action-card h4 {
-    margin: 0.5rem 0;
-    color: var(--secondary);
-    font-size: 1.1rem;
+  .action-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: var(--accent);
+    border-radius: 8px;
+    color: var(--gray-900);
+    flex-shrink: 0;
   }
 
-  .action-card p {
+  .action-content h3 {
+    margin: 0 0 0.5rem 0;
+    color: var(--gray-900);
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+
+  .action-content p {
     margin: 0;
-    color: #666;
-    font-size: 0.9rem;
+    color: var(--gray-600);
+    font-size: 0.875rem;
     line-height: 1.4;
   }
 

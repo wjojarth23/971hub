@@ -126,6 +126,12 @@
     </div>
   </header>
 {/if}
+  :global(.container) {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+  }
+</style>
 
 <main class="container">
   <slot />
@@ -162,16 +168,17 @@
     right: 50%;
     margin-left: -50vw;
     margin-right: -50vw;
-    margin-bottom: 2rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }
   .nav-container {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1rem 2rem;
+    padding: 0.75rem 1.5rem;
     max-width: 1400px;
     margin: 0 auto;
-    min-height: 60px;
+    height: 56px;
   }
 
   .brand {
@@ -184,7 +191,7 @@
 
   .brand h1 {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: 1.3rem;
     font-weight: 700;
     white-space: nowrap;
   }
@@ -201,13 +208,13 @@
   .nav-link {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem;
+    gap: 0.4rem;
+    padding: 0.5rem 0.9rem;
     border-radius: 6px;
     text-decoration: none;
     color: var(--secondary);
     font-weight: 500;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     transition: all 0.2s ease;
     border: 1px solid transparent;
     white-space: nowrap;
