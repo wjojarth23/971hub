@@ -8,7 +8,7 @@
   import { goto } from '$app/navigation';
   import { ArrowLeft, Triangle, Circle, Download, Settings, Plus, ShoppingCart, Zap, Copy, CheckCircle } from 'lucide-svelte';
   import stockData from '$lib/stock.json';
-
+  import DataTable from '$lib/components/DataTable.svelte';
   let subsystemId = $page.params.id;
   let user = null;
   let loading = true;
@@ -1081,123 +1081,124 @@
                 Build Duplicate
               </button>
             </div><div class="bom-table-container">
-              <table class="bom-table">
-                <thead>
-                  <tr>
-                    <th>Part Name</th>
-                    <th>Part Number</th>
-                    <th>Qty</th>
-                    <th>Type</th>
-                    <th>Material</th>
-                    <th>Workflow</th>
-                    <th>Bounding Box</th>
-                    <th>Stock Assignment</th>
-                    <th>Action</th>
-                    <th>Downloads</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each buildBOM as item, index}
-                    <tr>
-                      <td>
-                        <div class="part-name">
-                          {item.part_name}
-                          {#if item.description}
-                            <div class="part-description">{item.description}</div>
-                          {/if}
-                        </div>
-                      </td>
-                      <td>{item.part_number || '-'}</td>
-                      <td>{item.quantity}</td>                      <td>
-                        <select
-                          class="workflow-dropdown {item.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}"
-                          value={item.part_type}
-                          on:change={(e) => updatePartType(index, e.target.value)}
-                          style="background: {item.part_type === 'COTS' ? '#fff8e1' : '#e1f5fe'}; color: {item.part_type === 'COTS' ? '#f57f17' : '#0277bd'}; border: 1px solid {item.part_type === 'COTS' ? '#ffcc02' : '#81d4fa'}"
-                        >
-                          <option value="COTS" class="type-cots">COTS</option>
-                          <option value="manufactured" class="type-manufactured">Manufactured</option>
-                        </select>
-                      </td>                      <td>
-                        {#if item.part_type === 'COTS'}
-                          <span class="workflow-badge workflow-purchase">
-                            Purchase
-                          </span>
-                        {:else}
-                          <select 
-                            class="workflow-dropdown workflow-{item.workflow || item.manufacturing_process || 'mill'}" 
-                            value={item.workflow || item.manufacturing_process || 'mill'} 
-                            on:change={(e) => updateWorkflow(index, e.target.value)}
-                          >
-                            <option value="3d-print">3D Print</option>
-                            <option value="laser-cut">Laser Cut</option>
-                            <option value="lathe">Lathe</option>
-                            <option value="mill">Mill</option>
-                            <option value="router">Router</option>
-                          </select>
-                        {/if}
-                      </td>
-                      <td>{item.material || '-'}</td><td>
-                        {#if item.bounding_box_x && item.bounding_box_y && item.bounding_box_z}
-                          <div class="bounding-box">
-                            {(item.bounding_box_x * 1000).toFixed(1)} × {(item.bounding_box_y * 1000).toFixed(1)} × {(item.bounding_box_z * 1000).toFixed(1)} mm
-                          </div>
-                        {:else}
-                          <span class="no-data">No dimensions</span>
-                        {/if}
-                      </td>
-                      <td>                        <select bind:value={item.stock_assignment}>
-                          <option value="">Select Stock</option>
-                          {#each getStocksForWorkflow(item.workflow || 'mill') as stock}
-                            <option value={stock.description}>
-                              {stock.description}
-                            </option>
-                          {/each}
-                        </select>
-                      </td>
-                      <td>
+              <DataTable
+                rows={buildBOM}
+                columns={[
+                  { label: 'Part Name', accessor: 'part_name' },
+                  { label: 'Part Number', accessor: 'part_number' },
+                  { label: 'Qty', accessor: 'quantity' },
+                  { label: 'Type', accessor: 'part_type' },
+                  { label: 'Material', accessor: 'material' },
+                  { label: 'Workflow', accessor: 'workflow' },
+                  { label: 'Bounding Box', accessor: 'bounding_box' },
+                  { label: 'Stock Assignment', accessor: 'stock_assignment' },
+                  { label: 'Action', accessor: 'action' },
+                  { label: 'Downloads', accessor: 'downloads' }
+                ]}
+              >
+                <svelte:fragment slot="cell" let:row let:rowIndex let:col>
+                  {#if col.accessor === 'part_name'}
+                    <div class="part-name">
+                      {row.part_name}
+                      {#if row.description}
+                        <div class="part-description">{row.description}</div>
+                      {/if}
+                    </div>
+                  {:else if col.accessor === 'part_number'}
+                    {row.part_number || '-'}
+                  {:else if col.accessor === 'quantity'}
+                    {row.quantity}
+                  {:else if col.accessor === 'part_type'}
+                    <select
+                      class="workflow-dropdown {row.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}"
+                      value={row.part_type}
+                      on:change={(e) => updatePartType(rowIndex, e.target.value)}
+                      style="background: {row.part_type === 'COTS' ? '#fff8e1' : '#e1f5fe'}; color: {row.part_type === 'COTS' ? '#f57f17' : '#0277bd'}; border: 1px solid {row.part_type === 'COTS' ? '#ffcc02' : '#81d4fa'}"
+                    >
+                      <option value="COTS" class="type-cots">COTS</option>
+                      <option value="manufactured" class="type-manufactured">Manufactured</option>
+                    </select>
+                  {:else if col.accessor === 'workflow'}
+                    {#if row.part_type === 'COTS'}
+                      <span class="workflow-badge workflow-purchase">
+                        Purchase
+                      </span>
+                    {:else}
+                      <select
+                        class="workflow-dropdown workflow-{row.workflow || row.manufacturing_process || 'mill'}"
+                        value={row.workflow || row.manufacturing_process || 'mill'}
+                        on:change={(e) => updateWorkflow(rowIndex, e.target.value)}
+                      >
+                        <option value="3d-print">3D Print</option>
+                        <option value="laser-cut">Laser Cut</option>
+                        <option value="lathe">Lathe</option>
+                        <option value="mill">Mill</option>
+                        <option value="router">Router</option>
+                      </select>
+                    {/if}
+                  {:else if col.accessor === 'material'}
+                    {row.material || '-'}
+                  {:else if col.accessor === 'bounding_box'}
+                    {#if row.bounding_box_x && row.bounding_box_y && row.bounding_box_z}
+                      <div class="bounding-box">
+                        {(row.bounding_box_x * 1000).toFixed(1)} × {(row.bounding_box_y * 1000).toFixed(1)} × {(row.bounding_box_z * 1000).toFixed(1)} mm
+                      </div>
+                    {:else}
+                      <span class="no-data">No dimensions</span>
+                    {/if}
+                  {:else if col.accessor === 'stock_assignment'}
+                    <select bind:value={row.stock_assignment}>
+                      <option value="">Select Stock</option>
+                      {#each getStocksForWorkflow(row.workflow || 'mill') as stock}
+                        <option value={stock.description}>
+                          {stock.description}
+                        </option>
+                      {/each}
+                    </select>
+                  {:else if col.accessor === 'action'}
+                    <button
+                      class="btn btn-sm btn-add-part"
+                      on:click={() => addSingleToBuild(row)}
+                      disabled={addedPartsSet.has(row.part_number || row.part_name)}
+                    >
+                      {#if addedPartsSet.has(row.part_number || row.part_name)}
+                        <CheckCircle size={14} />
+                        Added
+                      {:else}
+                        <Plus size={14} />
+                        Add
+                      {/if}
+                    </button>
+                  {:else if col.accessor === 'downloads'}
+                    {#if row.onshape_part_id && row.part_type === 'manufactured'}
+                      <div class="download-buttons">
                         <button
-                          class="btn btn-sm btn-add-part"
-                          on:click={() => addSingleToBuild(item)}
-                          disabled={addedPartsSet.has(item.part_number || item.part_name)}
+                          class="btn btn-sm btn-download"
+                          on:click={() => downloadPartFile(row, 'stl')}
+                          title="Download STL for 3D printing"
                         >
-                          {#if addedPartsSet.has(item.part_number || item.part_name)}
-                            <CheckCircle size={14} />
-                            Added
-                          {:else}
-                            <Plus size={14} />
-                            Add
-                          {/if}                        </button>
-                      </td>
-                      <td>
-                        {#if item.onshape_part_id && item.part_type === 'manufactured'}
-                          <div class="download-buttons">
-                            <button
-                              class="btn btn-sm btn-download"
-                              on:click={() => downloadPartFile(item, 'stl')}
-                              title="Download STL for 3D printing"
-                            >
-                              <Download size={12} />
-                              STL
-                            </button>
-                            <button
-                              class="btn btn-sm btn-download"                              on:click={() => downloadPartFile(item, 'step')}
-                              title="Download STEP for CAM"
-                            >
-                              <Download size={12} />
-                              X_T
-                            </button>
-                          </div>
-                        {:else if !item.onshape_part_id}
-                          <span class="no-data">No part ID</span>
-                        {:else}
-                          <span class="no-data">COTS item</span>
-                        {/if}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+                          <Download size={12} />
+                          STL
+                        </button>
+                        <button
+                          class="btn btn-sm btn-download"
+                          on:click={() => downloadPartFile(row, 'step')}
+                          title="Download STEP for CAM"
+                        >
+                          <Download size={12} />
+                          X_T
+                        </button>
+                      </div>
+                    {:else if !row.onshape_part_id}
+                      <span class="no-data">No part ID</span>
+                    {:else}
+                      <span class="no-data">COTS item</span>
+                    {/if}
+                  {:else}
+                    {row[col.accessor]}
+                  {/if}
+                </svelte:fragment>
+              </DataTable>
             </div>
 
             <!-- Removed modal-actions and Create Build button as per requirements -->

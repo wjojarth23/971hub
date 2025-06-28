@@ -4,7 +4,7 @@
   import { userStore } from '$lib/stores/user.js';
   import { ShoppingCart, Package, DollarSign, Truck, CheckCircle, Clock, AlertTriangle, Edit, MapPin } from 'lucide-svelte';
   import { goto } from '$app/navigation';
-
+  import DataTable from '$lib/components/DataTable.svelte';
   let user = null;
   let loading = true;
   let purchasingItems = [];
@@ -118,115 +118,112 @@
     </div>
 
     {#if purchasingItems.length > 0}
-      <div class="purchasing-table-container">
-        <table class="purchasing-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Vendor</th>
-              <th>Part Number</th>
-              <th>Quantity</th>
-              <th>Price</th>
-              <th>Status</th>
-              <th>Kitting Location</th>
-              <th>Project</th>
-              <th>Requester</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each purchasingItems as item}
-              <tr class="status-{item.status}">
-                <td class="item-name">
-                  <div class="name-cell">
-                    <Package size={16} />
-                    {item.name}
-                  </div>
-                </td>
-                <td>
-                  {#if item.vendor}
-                    <span class="vendor-name">{item.vendor}</span>
-                  {:else}
-                    <span class="no-vendor">Not specified</span>
-                  {/if}
-                </td>
-                <td>
-                  {#if item.part_number}
-                    <code class="part-number">{item.part_number}</code>
-                  {:else}
-                    <span class="no-part-number">-</span>
-                  {/if}
-                </td>
-                <td class="quantity">
-                  {item.quantity}
-                </td>
-                <td class="price">
-                  {#if item.price}
-                    ${item.price}
-                  {:else if item.final_price}
-                    ${item.final_price}
-                  {:else}
-                    <span class="no-price">TBD</span>
-                  {/if}
-                </td>                <td>
-                  <div class="status-cell">
-                    {#if item.status === 'pending'}
-                      <Clock size={16} style="color: #f39c12" />
-                    {:else if item.status === 'ordered'}
-                      <ShoppingCart size={16} style="color: #3498db" />
-                    {:else if item.status === 'delivered'}
-                      <Truck size={16} style="color: #27ae60" />
-                    {:else if item.status === 'kitted'}
-                      <CheckCircle size={16} style="color: #2ecc71" />
-                    {:else}
-                      <Package size={16} style="color: #95a5a6" />
-                    {/if}
-                    <select 
-                      class="status-select" 
-                      value={item.status}
-                      on:change={(e) => updateStatus(item, e.target.value)}
-                    >
-                      <option value="pending">Pending</option>
-                      <option value="ordered">Ordered</option>
-                      <option value="delivered">Delivered</option>
-                      <option value="kitted">Kitted</option>
-                    </select>
-                  </div>
-                </td>
-                <td class="kitting-cell">
-                  {#if item.kitting_bin}
-                    <div class="kitting-display">
-                      <MapPin size={14} />
-                      <span>{item.kitting_bin}</span>
-                    </div>
-                  {:else}
-                    <input 
-                      class="kitting-input" 
-                      placeholder="Enter location..."
-                      on:keypress={(e) => {
-                        if (e.key === 'Enter') {
-                          updateKittingBin(item, e.target.value);
-                        }
-                      }}
-                    />
-                  {/if}
-                </td>
-                <td class="project-id">
-                  {item.project_id}
-                </td>
-                <td class="requester">
-                  {item.requester}
-                </td>
-                <td class="actions">
-                  <button class="edit-btn" title="Edit item">
-                    <Edit size={14} />
-                  </button>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        {loading}
+        rows={purchasingItems}
+        columns={[
+          { label: 'Name', accessor: 'name' },
+          { label: 'Vendor', accessor: 'vendor' },
+          { label: 'Part Number', accessor: 'part_number' },
+          { label: 'Quantity', accessor: 'quantity' },
+          { label: 'Price', accessor: 'price' },
+          { label: 'Status', accessor: 'status' },
+          { label: 'Kitting Location', accessor: 'kitting_bin' },
+          { label: 'Project', accessor: 'project_id' },
+          { label: 'Requester', accessor: 'requester' },
+          { label: 'Actions', accessor: 'actions' }
+        ]}
+      >
+        <div slot="toolbar" class="header-content">
+          <ShoppingCart size={32} />
+          <div>
+            <h1>Purchasing List</h1>
+            <p>Manage COTS parts, vendors, and purchase orders</p>
+          </div>
+        </div>
+
+        <svelte:fragment slot="cell" let:row let:rowIndex let:col>
+          {#if col.accessor === 'name'}
+            <div class="name-cell">
+              <Package size={16} />
+              {row.name}
+            </div>
+          {:else if col.accessor === 'vendor'}
+            {#if row.vendor}
+              <span class="vendor-name">{row.vendor}</span>
+            {:else}
+              <span class="no-vendor">Not specified</span>
+            {/if}
+          {:else if col.accessor === 'part_number'}
+            {#if row.part_number}
+              <code class="part-number">{row.part_number}</code>
+            {:else}
+              <span class="no-part-number">-</span>
+            {/if}
+          {:else if col.accessor === 'quantity'}
+            <span class="quantity">{row.quantity}</span>
+          {:else if col.accessor === 'price'}
+            {#if row.price}
+              ${row.price}
+            {:else if row.final_price}
+              ${row.final_price}
+            {:else}
+              <span class="no-price">TBD</span>
+            {/if}
+          {:else if col.accessor === 'status'}
+            <div class="status-cell">
+              {#if row.status === 'pending'}
+                <Clock size={16} style="color: #f39c12" />
+              {:else if row.status === 'ordered'}
+                <ShoppingCart size={16} style="color: #3498db" />
+              {:else if row.status === 'delivered'}
+                <Truck size={16} style="color: #27ae60" />
+              {:else if row.status === 'kitted'}
+                <CheckCircle size={16} style="color: #2ecc71" />
+              {:else}
+                <Package size={16} style="color: #95a5a6" />
+              {/if}
+              <select
+                class="status-select"
+                value={row.status}
+                on:change={(e) => updateStatus(row, e.target.value)}
+              >
+                <option value="pending">Pending</option>
+                <option value="ordered">Ordered</option>
+                <option value="delivered">Delivered</option>
+                <option value="kitted">Kitted</option>
+              </select>
+            </div>
+          {:else if col.accessor === 'kitting_bin'}
+            {#if row.kitting_bin}
+              <div class="kitting-display">
+                <MapPin size={14} />
+                <span>{row.kitting_bin}</span>
+              </div>
+            {:else}
+              <input
+                class="kitting-input"
+                placeholder="Enter location..."
+                on:keypress={(e) => {
+                  if (e.key === 'Enter') {
+                    updateKittingBin(row, e.target.value);
+                  }
+                }}
+              />
+            {/if}
+          {:else if col.accessor === 'project_id'}
+            <span class="project-id">{row.project_id}</span>
+          {:else if col.accessor === 'requester'}
+            <span class="requester">{row.requester}</span>
+          {:else if col.accessor === 'actions'}
+            <button class="edit-btn" title="Edit item">
+              <Edit size={14} />
+            </button>
+          {:else}
+            {row[col.accessor]}
+          {/if}
+        </svelte:fragment>
+      </DataTable>
     {:else}
       <div class="empty-state">
         <ShoppingCart size={64} />

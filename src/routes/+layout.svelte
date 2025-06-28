@@ -109,10 +109,12 @@
           <Router size={18} />
           Router
         </a>
-        <a href="/attendance" class="nav-link" class:active={isActive('/attendance')}>
-          <Trophy size={18} />
-          Attendance
-        </a>
+        {#if false}
+          <a href="/attendance" class="nav-link" class:active={isActive('/attendance')}>
+            <Trophy size={18} />
+            Attendance
+          </a>
+        {/if}
       </nav>
 
       <!-- User Menu - Simplified -->      <div class="user-menu">

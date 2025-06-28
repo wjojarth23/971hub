@@ -7,7 +7,7 @@
   import { goto } from '$app/navigation';
   import { ArrowLeft, Plus, CheckCircle, ShoppingCart, Zap, Package } from 'lucide-svelte';
   import stockData from '$lib/stock.json';
-
+  import DataTable from '$lib/components/DataTable.svelte';
   // Get subsystem ID and version ID from URL params
   let subsystemId = $page.url.searchParams.get('subsystem');
   let versionId = $page.url.searchParams.get('version');
@@ -632,102 +632,115 @@
       <p>Loading BOM...</p>
     </div>
   {:else}    <div class="bom-section">
-      <div class="bom-table-container">
-        <table class="bom-table">          <thead>
-            <tr>
-              <th>Part Name</th>
-              <th>Qty</th>
-              <th>Type</th>
-              <th>Workflow</th>
-              <th>Material</th>
-              <th>Dimensions</th>
-              <th>Stock Assignment</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>            {#each buildBOM as item, index}
-              <tr class="table-row">
-                <td>
-                  <div class="part-name">
-                    {item.part_name}
-                    {#if item.description}
-                      <div class="part-description">{item.description}</div>
-                    {/if}
-                  </div>
-                </td>
-                <td>{item.quantity}</td>
-                <td>
-                  <select
-                    class="type-dropdown {item.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}"
-                    value={item.part_type}
-                    on:change={(e) => updatePartType(index, e.target.value)}
-                  >
-                    <option value="COTS">COTS</option>
-                    <option value="manufactured">Manufactured</option>
-                  </select>
-                </td>
-                <td>
-                  {#if item.part_type === 'COTS'}
-                    <span class="workflow-badge workflow-purchase">Purchase</span>
-                  {:else}
-                    <select 
-                      class="workflow-dropdown workflow-{item.workflow || 'mill'}" 
-                      value={item.workflow || 'mill'} 
-                      on:change={(e) => updateWorkflow(index, e.target.value)}
-                    >
-                      <option value="3d-print">3D Print</option>
-                      <option value="laser-cut">Laser Cut</option>
-                      <option value="lathe">Lathe</option>
-                      <option value="mill">Mill</option>
-                      <option value="router">Router</option>
-                    </select>
-                  {/if}
-                </td>
-                <td>{item.material || '-'}</td>
-                <td>
-                  {#if item.bounding_box_x && item.bounding_box_y && item.bounding_box_z}
-                    <div class="bounding-box">
-                      {(item.bounding_box_x * 1000).toFixed(1)} × {(item.bounding_box_y * 1000).toFixed(1)} × {(item.bounding_box_z * 1000).toFixed(1)} mm
-                    </div>
-                  {:else}
-                    <span class="no-data">No dimensions</span>
-                  {/if}
-                </td>
-                <td>
-                  {#if item.part_type !== 'COTS'}
-                    <select bind:value={item.stock_assignment}>
-                      <option value="">Select Stock</option>
-                      {#each getStocksForWorkflow(item.workflow || 'mill') as stock}
-                        <option value={stock.description}>
-                          {stock.description}
-                        </option>
-                      {/each}
-                    </select>
-                  {:else}
-                    <span class="no-stock">-</span>
-                  {/if}
-                </td>
-                <td>
-                  <button
-                    class="btn btn-sm btn-yellow add-btn"
-                    on:click={() => handleAddClick(item)}
-                    disabled={addedPartsSet.has(item.part_number || item.part_name) || processingAdd}
-                    class:added={addedPartsSet.has(item.part_number || item.part_name)}
-                  >
-                    {#if addedPartsSet.has(item.part_number || item.part_name)}
-                      <CheckCircle size={14} />
-                      Added
-                    {:else}
-                      <Plus size={14} />
-                      Add
-                    {/if}
-                  </button>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        {loading}
+        rows={buildBOM}
+        columns={[
+          { label: 'Part Name', accessor: 'part_name' },
+          { label: 'Qty', accessor: 'quantity' },
+          { label: 'Type', accessor: 'part_type' },
+          { label: 'Workflow', accessor: 'workflow' },
+          { label: 'Material', accessor: 'material' },
+          { label: 'Dimensions', accessor: 'dimensions' },
+          { label: 'Stock Assignment', accessor: 'stock_assignment' },
+          { label: 'Action', accessor: 'action' }
+        ]}
+      >
+        <div slot="toolbar" class="header-content">
+          <div class="header-left">
+            <div class="header-info">
+              <h1>Build BOM</h1>
+              {#if subsystem && version}
+                <p class="subsystem-description">{subsystem.name} - {version.name}</p>
+              {/if}
+            </div>
+          </div>
+          <div class="header-right">
+            <button class="back-button" on:click={() => goto('/cad')}>
+              <ArrowLeft size={16} />
+              Back to CAD
+            </button>
+            <button class="btn btn-yellow" on:click={addAllCOTSToPurchasing}>
+              <ShoppingCart size={16} />
+              Add All COTS to Purchasing
+            </button>
+          </div>
+        </div>
+
+        <svelte:fragment slot="cell" let:row let:rowIndex let:col>
+          {#if col.accessor === 'part_name'}
+            <div class="part-name">
+              {row.part_name}
+              {#if row.description}
+                <div class="part-description">{row.description}</div>
+              {/if}
+            </div>
+          {:else if col.accessor === 'part_type'}
+            <select
+              class="type-dropdown {row.part_type === 'COTS' ? 'type-cots' : 'type-manufactured'}"
+              value={row.part_type}
+              on:change={(e) => updatePartType(rowIndex, e.target.value)}
+            >
+              <option value="COTS">COTS</option>
+              <option value="manufactured">Manufactured</option>
+            </select>
+          {:else if col.accessor === 'workflow'}
+            {#if row.part_type === 'COTS'}
+              <span class="workflow-badge workflow-purchase">Purchase</span>
+            {:else}
+              <select
+                class="workflow-dropdown workflow-{row.workflow || 'mill'}"
+                value={row.workflow || 'mill'}
+                on:change={(e) => updateWorkflow(rowIndex, e.target.value)}
+              >
+                <option value="3d-print">3D Print</option>
+                <option value="laser-cut">Laser Cut</option>
+                <option value="lathe">Lathe</option>
+                <option value="mill">Mill</option>
+                <option value="router">Router</option>
+              </select>
+            {/if}
+          {:else if col.accessor === 'dimensions'}
+            {#if row.bounding_box_x && row.bounding_box_y && row.bounding_box_z}
+              <div class="bounding-box">
+                {(row.bounding_box_x * 1000).toFixed(1)} × {(row.bounding_box_y * 1000).toFixed(1)} × {(row.bounding_box_z * 1000).toFixed(1)} mm
+              </div>
+            {:else}
+              <span class="no-data">No dimensions</span>
+            {/if}
+          {:else if col.accessor === 'stock_assignment'}
+            {#if row.part_type !== 'COTS'}
+              <select bind:value={row.stock_assignment}>
+                <option value="">Select Stock</option>
+                {#each getStocksForWorkflow(row.workflow || 'mill') as stock}
+                  <option value={stock.description}>
+                    {stock.description}
+                  </option>
+                {/each}
+              </select>
+            {:else}
+              <span class="no-stock">-</span>
+            {/if}
+          {:else if col.accessor === 'action'}
+            <button
+              class="btn btn-sm btn-yellow add-btn"
+              on:click={() => handleAddClick(row)}
+              disabled={addedPartsSet.has(row.part_number || row.part_name) || processingAdd}
+              class:added={addedPartsSet.has(row.part_number || row.part_name)}
+            >
+              {#if addedPartsSet.has(row.part_number || row.part_name)}
+                <CheckCircle size={14} />
+                Added
+              {:else}
+                <Plus size={14} />
+                Add
+              {/if}
+            </button>
+          {:else}
+            {row[col.accessor]}
+          {/if}
+        </svelte:fragment>
+      </DataTable>
     </div>
   {/if}
 </div>
