@@ -126,12 +126,6 @@
     </div>
   </header>
 {/if}
-  :global(.container) {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 0 1.5rem;
-  }
-</style>
 
 <main class="container">
   <slot />
@@ -147,6 +141,12 @@
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--background);
     color: var(--text);
+  }
+
+  :global(.container) {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
   }
 
   :global(:root) {
