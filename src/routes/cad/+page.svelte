@@ -16,7 +16,7 @@
   let selectedRelease = null;
   let newSubsystem = { name: '', description: '' };
   let onshapeUrl = '';
-  let fileInput;
+  // file inputs are referenced by id per subsystem
   let loadingOnShape = false;
   let onshapeData = {};
   let builds = [];
@@ -250,8 +250,8 @@
     }
   }
 
-  async function handleFileUpload(subsystemId) {
-    const files = fileInput.files;
+  async function handleFileUpload(subsystemId, inputEl) {
+    const files = inputEl?.files;
     if (!files || files.length === 0) return;
 
     try {
@@ -281,7 +281,7 @@
         if (dbError) throw dbError;
       }
 
-      fileInput.value = '';
+  if (inputEl) inputEl.value = '';
       alert('Files uploaded successfully');
     } catch (error) {
       console.error('Error uploading files:', error);
@@ -666,7 +666,7 @@
           <p>Manage robot subsystems with OnShape integration</p>
         </div>
       </div>
-      <button class="btn btn-primary" on:click={() => showCreateModal = true}>
+  <button class="btn btn-primary btn-sm" on:click={() => showCreateModal = true}>
         <Plus size={16} />
         Create Subsystem
       </button>
@@ -676,6 +676,9 @@
           class="subsystem-card" 
           class:clickable={subsystem.onshape_url}
           on:click={() => subsystem.onshape_url && goto(`/cad/${subsystem.id}`)}
+          role="button"
+          tabindex="0"
+          on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && subsystem.onshape_url && goto(`/cad/${subsystem.id}`)}
         >
           <div class="subsystem-header">
             <h3>{subsystem.name}</h3>
@@ -733,44 +736,44 @@
             </div>
           {/if}
 
-          <div class="subsystem-actions" on:click|stopPropagation>
+          <div class="subsystem-actions">
             {#if isSubsystemLead(subsystem)}
               {#if !subsystem.onshape_url}
                 <button 
-                  class="btn btn-secondary" 
-                  on:click={() => { selectedSubsystem = subsystem.id; showLinkModal = true; }}
+                  class="btn btn-secondary btn-sm" 
+                  on:click|stopPropagation={() => { selectedSubsystem = subsystem.id; showLinkModal = true; }}
                 >
                   <Link size={16} />
                   Link OnShape
                 </button>
               {/if}
-              <label class="btn btn-secondary">
+              <input 
+                id={`file-input-${subsystem.id}`}
+                type="file" 
+                multiple 
+                on:change={(e) => handleFileUpload(subsystem.id, e.currentTarget)}
+                style="display: none;"
+              />
+              <button type="button" class="btn btn-secondary btn-sm" on:click|stopPropagation={() => document.getElementById(`file-input-${subsystem.id}`)?.click()}>
                 <Upload size={16} />
                 Upload Files
-                <input 
-                  type="file" 
-                  multiple 
-                  bind:this={fileInput} 
-                  on:change={() => handleFileUpload(subsystem.id)}
-                  style="display: none;"
-                />
-              </label>
+              </button>
             {:else if isSubsystemMember(subsystem)}
-              <label class="btn btn-secondary">
+              <input 
+                id={`file-input-${subsystem.id}`}
+                type="file" 
+                multiple 
+                on:change={(e) => handleFileUpload(subsystem.id, e.currentTarget)}
+                style="display: none;"
+              />
+              <button type="button" class="btn btn-secondary btn-sm" on:click|stopPropagation={() => document.getElementById(`file-input-${subsystem.id}`)?.click()}>
                 <Upload size={16} />
                 Upload Files
-                <input 
-                  type="file" 
-                  multiple 
-                  bind:this={fileInput} 
-                  on:change={() => handleFileUpload(subsystem.id)}
-                  style="display: none;"
-                />
-              </label>
+              </button>
             {:else}
               <button 
-                class="btn btn-primary" 
-                on:click={() => joinSubsystem(subsystem.id)}
+                class="btn btn-primary btn-sm" 
+                on:click|stopPropagation={() => joinSubsystem(subsystem.id)}
               >
                 <UserPlus size={16} />
                 Join Subsystem
@@ -785,7 +788,7 @@
           <Settings size={48} />
           <h3>No Subsystems Yet</h3>
           <p>Create your first subsystem to get started with CAD management</p>
-          <button class="btn btn-primary" on:click={() => showCreateModal = true}>
+          <button class="btn btn-primary btn-sm" on:click={() => showCreateModal = true}>
             <Plus size={16} />
             Create First Subsystem
           </button>
@@ -829,10 +832,7 @@
               </div>
               <div class="build-actions">
                 {#if build.status === 'ready_to_assemble'}
-                  <button 
-                    class="btn btn-primary" 
-                    on:click={() => markAsAssembled(build.id)}
-                  >
+                  <button class="btn btn-primary btn-sm" on:click={() => markAsAssembled(build.id)}>
                     Mark as Assembled
                   </button>
                 {/if}
@@ -846,8 +846,8 @@
 
   <!-- Create Subsystem Modal -->
   {#if showCreateModal}
-    <div class="modal-overlay" on:click={() => showCreateModal = false}>
-      <div class="modal" on:click|stopPropagation>
+    <div class="modal-overlay" role="button" tabindex="0" on:keydown={(e) => e.key === 'Escape' && (showCreateModal = false)} on:click={() => showCreateModal = false}>
+  <div class="modal" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
         <div class="modal-header">
           <h2>Create New Subsystem</h2>
           <button class="close-btn" on:click={() => showCreateModal = false}>×</button>
@@ -874,10 +874,10 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" on:click={() => showCreateModal = false}>
+          <button class="btn btn-secondary btn-sm" on:click={() => showCreateModal = false}>
             Cancel
           </button>
-          <button class="btn btn-primary" on:click={createSubsystem}>
+          <button class="btn btn-primary btn-sm" on:click={createSubsystem}>
             <Plus size={16} />
             Create Subsystem
           </button>
@@ -888,8 +888,8 @@
 
   <!-- Link OnShape Modal -->
   {#if showLinkModal}
-    <div class="modal-overlay" on:click={() => showLinkModal = false}>
-      <div class="modal" on:click|stopPropagation>
+    <div class="modal-overlay" role="button" tabindex="0" on:keydown={(e) => e.key === 'Escape' && (showLinkModal = false)} on:click={() => showLinkModal = false}>
+  <div class="modal" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
         <div class="modal-header">
           <h2>Link OnShape Document</h2>
           <button class="close-btn" on:click={() => showLinkModal = false}>×</button>
@@ -908,11 +908,9 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" on:click={() => showLinkModal = false}>
-            Cancel
-          </button>
+          <button class="btn btn-secondary btn-sm" on:click={() => showLinkModal = false}>Cancel</button>
           <button 
-            class="btn btn-primary" 
+            class="btn btn-primary btn-sm" 
             on:click={linkOnShapeDocument}
             disabled={loadingOnShape}
           >
@@ -930,8 +928,8 @@
 
   <!-- Build BOM Modal -->
   {#if showBuildModal}
-    <div class="modal-overlay" on:click={() => showBuildModal = false}>
-      <div class="modal modal-large" on:click|stopPropagation>
+    <div class="modal-overlay" role="button" tabindex="0" on:keydown={(e) => e.key === 'Escape' && (showBuildModal = false)} on:click={() => showBuildModal = false}>
+  <div class="modal modal-large" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
         <div class="modal-header">
           <h2>Build BOM - {selectedRelease?.name}</h2>
           <button class="close-btn" on:click={() => showBuildModal = false}>×</button>
@@ -939,19 +937,19 @@
         <div class="modal-body">
           <div class="bom-actions">
             <button 
-              class="btn btn-primary" 
+              class="btn btn-primary btn-sm" 
               on:click={() => addAllCOTSToPurchasing(builds.find(b => b.release_id === selectedRelease?.id)?.id)}
             >
               Add All COTS to Purchasing
             </button>
             <button 
-              class="btn btn-secondary" 
+              class="btn btn-secondary btn-sm" 
               on:click={() => addManufacturedIteration(builds.find(b => b.release_id === selectedRelease?.id)?.id)}
             >
               Manufacture Iteration
             </button>
             <button 
-              class="btn btn-secondary" 
+              class="btn btn-secondary btn-sm" 
               on:click={() => buildDuplicate(builds.find(b => b.release_id === selectedRelease?.id)?.id)}
             >
               Build Duplicate
@@ -992,7 +990,7 @@
                     </td>
                     <td>
                       <button 
-                        class="btn btn-small" 
+                        class="btn btn-sm" 
                         on:click={() => addSinglePartToList(item.id)}
                         disabled={item.added_to_parts_list}
                       >
@@ -1006,9 +1004,7 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" on:click={() => showBuildModal = false}>
-            Close
-          </button>
+          <button class="btn btn-secondary btn-sm" on:click={() => showBuildModal = false}>Close</button>
         </div>
       </div>
     </div>
@@ -1111,7 +1107,7 @@
   }
   .subsystem-card {
     background: var(--primary);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     padding: 1.5rem;
     margin-bottom: 1rem;
@@ -1153,7 +1149,7 @@
   }
   .badge {
     padding: 0.25rem 0.75rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 0.875rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -1224,11 +1220,7 @@
     margin-top: 1rem;
   }
 
-  .releases-section h4 {
-    margin: 0 0 0.75rem 0;
-    color: var(--secondary);
-    font-size: 1rem;
-  }
+  /* .releases-section h4 removed (unused) */
 
   .releases-list {
     display: flex;
@@ -1282,7 +1274,7 @@
   .builds-section {
     margin-top: 2rem;
     background: var(--primary);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     padding: 1.5rem;
     margin-bottom: 1rem;
@@ -1301,7 +1293,7 @@
   }
   .build-card {
     background: var(--primary);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     padding: 1.5rem;
     margin-bottom: 1rem;

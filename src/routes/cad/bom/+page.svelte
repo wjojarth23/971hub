@@ -128,6 +128,88 @@
         }
       });
 
+      // Persist an initial Build and save the full BOM as 'other' so it's editable after creation
+      try {
+        const buildHash = `${subsystem.name}_${version.id}`;
+        let build = null;
+        const { data: existingBuild, error: buildCheckError } = await supabase
+          .from('builds')
+          .select('*')
+          .eq('build_hash', buildHash)
+          .single();
+        if (buildCheckError && buildCheckError.code !== 'PGRST116') {
+          console.warn('Build lookup failed:', buildCheckError.message);
+        }
+        if (existingBuild) {
+          build = existingBuild;
+        } else {
+          const { data: newBuild, error: buildCreateError } = await supabase
+            .from('builds')
+            .insert([{
+              subsystem_id: subsystem.id,
+              release_id: version.id,
+              release_name: version.name,
+              build_hash: buildHash,
+              status: 'pending',
+              created_by: user.id,
+              part_ids: []
+            }])
+            .select()
+            .single();
+          if (buildCreateError) throw buildCreateError;
+          build = newBuild;
+        }
+
+        // Insert BOM rows as 'other'
+        // First, check if such 'other' rows already exist to avoid duplicates on reload
+        const { count: existingOtherCount, error: existingOtherErr } = await supabase
+          .from('build_bom')
+          .select('id', { count: 'exact', head: true })
+          .eq('build_id', build.id)
+          .eq('part_type', 'other');
+        if (existingOtherErr) {
+          console.warn('Warning checking existing BOM rows:', existingOtherErr.message);
+        }
+        const bomRows = (buildBOM || []).map(item => ({
+          build_id: build.id,
+          part_name: item.part_name || item.part_number || 'Unknown Part',
+          part_number: item.part_number || null,
+          quantity: item.quantity || 1,
+          part_type: 'other',
+          material: item.material || null,
+          stock_assignment: item.stock_assignment || null,
+          workflow: item.workflow || item.manufacturing_process || null,
+          bounding_box_x: item.bounding_box_x || null,
+          bounding_box_y: item.bounding_box_y || null,
+          bounding_box_z: item.bounding_box_z || null,
+          onshape_part_id: item.onshape_part_id || null,
+          onshape_document_id: subsystem.onshape_document_id || null,
+          onshape_wvm: 'v',
+          onshape_wvmid: version.id,
+          onshape_element_id: item.onshape_part_studio_element_id || subsystem.onshape_element_id || null,
+          file_format: (item.workflow === '3d-print' ? 'stl' : 'step'),
+          is_onshape_part: !!item.onshape_part_id,
+          status: 'pending',
+          added_to_parts_list: false,
+          added_to_purchasing: false,
+          file_url: null
+        }));
+
+        if (bomRows.length > 0 && (!existingOtherCount || existingOtherCount === 0)) {
+          // Best-effort insert; if constraint or dupes, continue
+          const { error: bomInsertError } = await supabase
+            .from('build_bom')
+            .insert(bomRows);
+          if (bomInsertError) {
+            console.warn('Initial BOM insert warning:', bomInsertError.message);
+          }
+        } else if (existingOtherCount && existingOtherCount > 0) {
+          console.log(`Skipped inserting initial BOM: ${existingOtherCount} 'other' rows already exist for this build.`);
+        }
+      } catch (persistErr) {
+        console.warn('Could not persist initial BOM as other:', persistErr.message);
+      }
+
     } catch (error) {
       console.error('Error loading BOM:', error);
       console.log('Creating mock BOM data for testing...');
@@ -210,7 +292,102 @@
       autoAssignStock(index);
       buildBOM = [...buildBOM]; // Force reactivity
     }
-  }  async function addPartToManufacturing(item) {
+  }
+
+  // Drawing modal state for LATHE/MILL parts
+  let showDrawingModal = false;
+  let drawingUrlInput = '';
+  let pendingManufacturedItem = null;
+
+  // Portal action: render nodes into document.body to escape any stacking/overflow contexts
+  function portal(node) {
+    const target = document.body;
+    target.appendChild(node);
+    console.log('Portal appended node:', node.id || node.className);
+    return {
+      destroy() {
+        if (node && node.parentNode) {
+          node.parentNode.removeChild(node);
+          console.log('Portal removed node:', node.id || node.className);
+        }
+      }
+    };
+  }
+
+  function parseElementIdFromOnshapeUrl(url) {
+    try {
+      if (!url) return null;
+      // Expect URLs like: https://cad.onshape.com/documents/{did}/{wvm}/{wvmid}/e/{eid}
+      const match = url.match(/\/e\/([a-f0-9]{24})/i);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function promptForDrawingUrl(item) {
+    pendingManufacturedItem = item;
+    drawingUrlInput = '';
+    // Defer opening to the next tick so the original click can't immediately close it
+    setTimeout(() => {
+      showDrawingModal = true;
+      console.log('Drawing modal state now visible:', showDrawingModal, 'for', pendingManufacturedItem?.part_name);
+      // After DOM updates, verify nodes exist and log geometry. If not, fall back to prompt().
+      setTimeout(async () => {
+        const bd = document.getElementById('drawing-modal-backdrop');
+        const md = document.getElementById('drawing-modal');
+        console.log('DOM check -> backdrop exists:', !!bd, 'display:', bd && getComputedStyle(bd).display, 'modal exists:', !!md, 'display:', md && getComputedStyle(md).display);
+        if (md) {
+          const rect = md.getBoundingClientRect();
+          console.log('Modal rect:', rect);
+        } else {
+          console.warn('Drawing modal DOM did not materialize; falling back to window.prompt');
+          const url = window.prompt('Paste Onshape Drawing tab URL (must contain /e/{elementId}):', '');
+          if (url && url.trim()) {
+            const eid = parseElementIdFromOnshapeUrl(url.trim());
+            if (!eid) {
+              alert('Invalid Onshape drawing URL. Please paste a Drawing tab URL containing /e/{elementId}.');
+              return;
+            }
+            // Proceed without showing the Svelte modal UI
+            const itemRef = pendingManufacturedItem;
+            pendingManufacturedItem = null;
+            showDrawingModal = false;
+            await addPartToManufacturing(itemRef, eid);
+          } else {
+            // User cancelled; reset pending state
+            pendingManufacturedItem = null;
+            showDrawingModal = false;
+          }
+        }
+      }, 50);
+    }, 0);
+  }
+
+  function cancelDrawingModal() {
+    showDrawingModal = false;
+    console.log('Drawing modal cancelled');
+    drawingUrlInput = '';
+    pendingManufacturedItem = null;
+  }
+
+  async function confirmDrawingModal() {
+    if (!drawingUrlInput?.trim()) {
+      alert('Please enter a drawing URL.');
+      return;
+    }
+    const eid = parseElementIdFromOnshapeUrl(drawingUrlInput.trim());
+    if (!eid) {
+      alert('Invalid Onshape drawing URL. Please paste a Drawing tab URL containing /e/{elementId}.');
+      return;
+    }
+    showDrawingModal = false;
+    const item = pendingManufacturedItem;
+    pendingManufacturedItem = null;
+    await addPartToManufacturing(item, eid);
+  }
+
+  async function addPartToManufacturing(item, drawingElementId = null) {
     console.log('addPartToManufacturing called with:', item);
     console.log('Current user:', user);
     console.log('Current version:', version);
@@ -280,14 +457,15 @@
       let file_format = null;
       const workflow = item.workflow || item.manufacturing_process;
       const partId = item.onshape_part_id;
-      const partStudioElementId = item.onshape_part_studio_element_id; // Use Part Studio element ID
+      const partStudioElementId = item.onshape_part_studio_element_id; // Prefer Part Studio element ID when available
       const wvm = 'v';
       const wvmid = version.id;
-
-      // Validate that we have the Part Studio element ID
-      if (!partStudioElementId) {
-        throw new Error(`Missing Part Studio element ID for part "${item.part_name}". Cannot download file without Part Studio reference.`);
-      }      // Determine file format based on workflow
+      // Choose an element ID for downloads: prefer Part Studio; otherwise fall back to the assembly element
+      const elementId = partStudioElementId || subsystem.onshape_element_id;
+      if (!elementId) {
+        throw new Error(`Missing Onshape element ID for part "${item.part_name}". No Part Studio or Assembly element available.`);
+      }
+      // Determine file format based on workflow
       if (workflow === 'router') {
         file_format = 'step';
       } else if (workflow === '3d-print') {
@@ -314,7 +492,7 @@
         file_url: ''
       };
 
-      // Try to add Onshape fields if they exist in the database schema
+  // Try to add Onshape fields if they exist in the database schema
       let partData = null;
       try {
         // Check if onshape fields exist by attempting to insert with them
@@ -323,7 +501,7 @@
           onshape_document_id: subsystem.onshape_document_id,
           onshape_wvm: wvm,
           onshape_wvmid: wvmid,
-          onshape_element_id: partStudioElementId, // Part Studio element ID (not assembly)
+          onshape_element_id: elementId, // Use Part Studio when available; otherwise assembly element ID
           onshape_part_id: partId,
           file_format: file_format,
           is_onshape_part: true
@@ -356,6 +534,22 @@
       } catch (fallbackError) {
         console.error('Failed to insert part:', fallbackError);
         throw fallbackError;
+      }
+
+      // If this is a lathe/mill part and we captured a drawing EID, try to persist it (optional, ignore if column missing)
+      try {
+        if (partData && drawingElementId && (workflow === 'lathe' || workflow === 'mill')) {
+          const { error: drawUpdateError } = await supabase
+            .from('parts')
+            .update({ onshape_drawing_element_id: drawingElementId })
+            .eq('id', partData.id);
+          if (drawUpdateError) {
+            // Silently ignore if the column doesn't exist yet
+            console.warn('Could not store drawing element ID (column may not exist):', drawUpdateError.message);
+          }
+        }
+      } catch (e) {
+        console.warn('Ignoring drawing EID persist error:', e?.message || e);
       }
 
       // Add the part ID to the build's part_ids array
@@ -508,6 +702,13 @@
     console.log('Add button clicked for:', item);
     if (item.part_type === 'COTS') {
       addCOTSToPurchasing(item);
+      return;
+    }
+    const wf = String(item.workflow || item.manufacturing_process || '').trim().toLowerCase();
+    if (wf === 'lathe' || wf === 'mill') {
+      console.log('Opening drawing modal for', item?.part_name);
+      // Require drawing URL for lathe/mill
+      promptForDrawingUrl(item);
     } else {
       addPartToManufacturing(item);
     }
@@ -732,6 +933,32 @@
   {/if}
 </div>
 
+<!-- Drawing URL Modal -->
+{#if showDrawingModal}
+  <div
+    use:portal
+    id="drawing-modal-backdrop"
+    class="modal-backdrop"
+    role="presentation"
+    tabindex="-1"
+    on:click|stopPropagation
+  ></div>
+  <div use:portal id="drawing-modal" class="modal" on:click|stopPropagation>
+    <h3>Attach Drawing URL</h3>
+    <p>Lathe and Mill parts require an Onshape Drawing. Paste the Drawing tab URL below.</p>
+    <input
+      type="url"
+      class="form-input"
+      placeholder="https://cad.onshape.com/documents/.../e/{elementId}"
+      bind:value={drawingUrlInput}
+    />
+    <div class="modal-actions">
+      <button class="btn" on:click={cancelDrawingModal}>Cancel</button>
+      <button class="btn btn-yellow" on:click={confirmDrawingModal}>Attach & Add</button>
+    </div>
+  </div>
+{/if}
+
 <style>  .main-content {
     max-width: 1600px;
     margin: 0 auto;
@@ -813,36 +1040,6 @@
     /* Container made invisible - no background, border, or padding */
     display: block;
   }
-  .btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border: none;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .btn-primary {
-    background: var(--primary);
-    color: white;
-  }
-
-  .btn-primary:hover {
-    background: var(--primary-dark);
-  }
-  .btn-warning {
-    background: #ff9800;
-    color: white;
-  }
-
-  .btn-warning:hover {
-    background: #f57c00;
-  }
-
   .btn-yellow {
     background: #FFD700;
     color: #333;
@@ -853,10 +1050,7 @@
     background: #FFC107;
   }
 
-  .btn-sm {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
-  }
+  /* Buttons use global styles; .btn-yellow is an extra accent variant */
 
   .bom-table-container {
     overflow-x: auto;
@@ -1014,5 +1208,42 @@
     background: white;
     cursor: pointer;
     height: 32px;
+  }
+
+  /* Modal styles */
+  .modal-backdrop {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 2147483646 !important;
+    display: block !important;
+    pointer-events: auto !important;
+  }
+  .modal {
+    position: fixed !important;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) !important;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    width: min(560px, 92vw);
+    z-index: 2147483647 !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    display: block !important;
+    pointer-events: auto !important;
+  }
+  .modal h3 { margin: 0 0 0.5rem 0; }
+  .modal p { margin: 0 0 0.75rem 0; color: var(--secondary); }
+  .modal .form-input { width: 100%; }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
   }
 </style>

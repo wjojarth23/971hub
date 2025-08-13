@@ -593,17 +593,58 @@
 
       if (error) throw error;
 
-      // Insert BOM items
-      const bomItems = buildBOM.map(item => ({
-        ...item,
-        build_id: build.id
-      }));
-
-      const { error: bomError } = await supabase
+      // Insert BOM items: save entire BOM as 'other' so they don't affect progress sliders yet
+      // First, check if we've already inserted 'other' rows for this build to avoid duplicates
+      const { count: existingOtherCount, error: existingOtherErr } = await supabase
         .from('build_bom')
-        .insert(bomItems);
+        .select('id', { count: 'exact', head: true })
+        .eq('build_id', build.id)
+        .eq('part_type', 'other');
 
-      if (bomError) throw bomError;
+      if (existingOtherErr) {
+        console.warn('Warning checking existing BOM rows:', existingOtherErr.message);
+      }
+
+      const bomItems = buildBOM.map(item => {
+        // try to preserve useful metadata for later promotion to manufacturing/purchasing
+        const wvm = 'v';
+        const wvmid = selectedVersion.id;
+        const file_format = item.workflow === '3d-print' ? 'stl' : 'step';
+        return {
+          build_id: build.id,
+          part_name: item.part_name || item.part_number || 'Unknown Part',
+          part_number: item.part_number || null,
+          quantity: item.quantity || 1,
+          part_type: 'other',
+          material: item.material || null,
+          stock_assignment: item.stock_assignment || null,
+          workflow: item.workflow || item.manufacturing_process || null,
+          bounding_box_x: item.bounding_box_x || null,
+          bounding_box_y: item.bounding_box_y || null,
+          bounding_box_z: item.bounding_box_z || null,
+          onshape_part_id: item.onshape_part_id || null,
+          onshape_document_id: subsystem.onshape_document_id || null,
+          onshape_wvm: wvm,
+          onshape_wvmid: wvmid,
+          onshape_element_id: item.onshape_part_studio_element_id || subsystem.onshape_element_id || null,
+          file_format,
+          is_onshape_part: !!item.onshape_part_id,
+          status: 'pending',
+          added_to_parts_list: false,
+          added_to_purchasing: false,
+          file_url: null
+        };
+      });
+
+      if (!existingOtherCount || existingOtherCount === 0) {
+        const { error: bomError } = await supabase
+          .from('build_bom')
+          .insert(bomItems);
+
+        if (bomError) throw bomError;
+      } else {
+        console.log(`Skipped inserting initial BOM: ${existingOtherCount} 'other' rows already exist for this build.`);
+      }
 
       alert('Build created successfully!');
       showBuildModal = false;

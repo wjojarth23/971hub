@@ -351,7 +351,7 @@ export async function GET({ url }) {
     try {
         let apiPath;
         
-        switch (action) {
+  switch (action) {
             case 'document-info':
                 apiPath = `/api/v11/documents/${documentId}`;
                 break;
@@ -459,6 +459,78 @@ export async function GET({ url }) {
                 
                 // Use the new translation workflow for STEP files
                 return await handlePartTranslation(documentId, stepWvm, stepWvmId, elementId, stepPartId, 'STEP');
+      case 'translate-drawing': {
+        const drawWvm = url.searchParams.get('wvm') || 'w';
+        const drawWvmId = url.searchParams.get('wvmId');
+        if (!elementId) {
+          return json({ error: 'Missing elementId for drawing translation' }, { status: 400 });
+        }
+        if (!drawWvmId) {
+          return json({ error: 'Missing wvmId for drawing translation' }, { status: 400 });
+        }
+
+        // Initiate drawing translation to PDF
+        const createResp = await fetch(
+          `${ONSHAPE_BASE_URL}/api/v11/drawings/d/${documentId}/${drawWvm}/${drawWvmId}/e/${elementId}/translations`,
+          {
+            method: 'POST',
+            headers: {
+              ...getBasicAuth(),
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+              formatName: 'PDF',
+              storeInDocument: false
+            })
+          }
+        );
+        if (!createResp.ok) {
+          const t = await createResp.text();
+          return json({ error: `Drawing translation init failed: ${createResp.status}`, details: t }, { status: createResp.status });
+        }
+        const { id: drawTransId } = await createResp.json();
+
+        // Poll translation status
+        let state = 'ACTIVE';
+        let attempts = 0;
+        const maxAttempts = 60;
+        let externalId;
+        while (state === 'ACTIVE' && attempts < maxAttempts) {
+          await new Promise(r => setTimeout(r, 2000));
+          attempts++;
+          const st = await fetch(`${ONSHAPE_BASE_URL}/api/v11/translations/${drawTransId}`, { headers: { ...getBasicAuth(), 'Accept': 'application/json' } });
+          if (!st.ok) {
+            const et = await st.text();
+            return json({ error: `Drawing translation status failed: ${st.status}`, details: et }, { status: st.status });
+          }
+          const sd = await st.json();
+          state = sd.requestState;
+          externalId = (sd.resultExternalDataIds || [])[0];
+        }
+        if (attempts >= maxAttempts) {
+          return json({ error: 'Drawing translation timeout' }, { status: 408 });
+        }
+        if (state !== 'DONE' || !externalId) {
+          return json({ error: `Drawing translation failed: ${state}` }, { status: 500 });
+        }
+
+        // Download PDF
+        const dl = await fetch(`${ONSHAPE_BASE_URL}/api/v11/documents/d/${documentId}/externaldata/${externalId}`,
+          { headers: { ...getBasicAuth(), 'Accept': 'application/pdf' } });
+        if (!dl.ok) {
+          const et = await dl.text();
+          return json({ error: `PDF download failed: ${dl.status}`, details: et }, { status: dl.status });
+        }
+        const buf = await dl.arrayBuffer();
+        return new Response(buf, {
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="drawing.pdf"',
+            'Content-Length': buf.byteLength.toString()
+          }
+        });
+      }
             case 'check-translation':
                 const translationId = url.searchParams.get('translationId');
                 if (!translationId) {
@@ -487,8 +559,8 @@ export async function GET({ url }) {
                 
                 apiPath = `/api/v11/documents/d/${documentId}/externaldata/${externalDataId}`;
                 break;
-            default:
-                return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box, download-stl, download-step, translate-part, convert-to-svg, check-translation, download-translation-result' }, { status: 400 });
+      default:
+        return json({ error: 'Invalid action. Available actions: document-info, versions, version-details, assembly-info, assembly-bom, part-bounding-box, download-stl, download-step, translate-part, convert-to-svg, translate-drawing, check-translation, download-translation-result' }, { status: 400 });
         }
 
         const controller = new AbortController();

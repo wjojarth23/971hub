@@ -573,38 +573,7 @@
     color: #666;
   }
 
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--background);
-    color: var(--secondary);
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .btn-primary {
-    background: var(--accent);
-    color: var(--secondary);
-    border-color: var(--accent);
-  }
-
-  .btn-primary:hover {
-    background: #d4a829;
-    border-color: #d4a829;
-  }
-
-  .btn-secondary:hover {
-    background: var(--primary);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
+  /* Buttons use global styles from app.css */
 
   .error-container {
     display: flex;

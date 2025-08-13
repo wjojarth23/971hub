@@ -59,10 +59,11 @@ See [CHATGPT_INTEGRATION.md](./CHATGPT_INTEGRATION.md) for detailed setup instru
    PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    ```
 
-4. Set up the database using the provided SQL files:
-   - `database_schema.sql`
-   - `database_subsystems.sql`
-   - `supabase.sql`
+4. Set up the database (run in Supabase SQL Editor, in this order):
+   - `migration_add_build_system.sql`
+   - `migration_add_other_category.sql`
+   - `migration_add_drawing_support.sql`
+   See BUILD_SYSTEM_SETUP.md for details. Do not run `migration_fix_builds.sql` (deprecated).
 
 ## Developing
 

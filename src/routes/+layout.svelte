@@ -116,7 +116,7 @@
       </nav>
 
       <!-- User Menu - Simplified -->      <div class="user-menu">
-        <button class="logout-link" on:click={handleLogout}>
+        <button class="btn btn-ghost btn-sm" on:click={handleLogout}>
           <LogOut size={16} />
           Sign Out
         </button>
@@ -141,14 +141,6 @@
     color: var(--text);
   }
 
-  :global(:root) {
-    --primary: #ffffff;
-    --secondary: #1a1a1a;
-    --accent: #f1c40f;
-    --background: #f8f9fa;
-    --border: #e1e5e9;
-    --text: #2c3e50;
-  }
 
   /* Navigation Header Styles */
   .nav-header {
@@ -164,9 +156,9 @@
   }
   .nav-container {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: space-between;
-    padding: 1rem 2rem;
+    padding: 0 2rem; /* remove top padding so active background touches top */
     max-width: 1400px;
     margin: 0 auto;
     min-height: 60px;
@@ -189,7 +181,7 @@
 
   .desktop-nav {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 1rem;
     flex: 1;
     justify-content: center;
@@ -201,26 +193,27 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.75rem 1.25rem;
-    border-radius: 6px;
     text-decoration: none;
     color: var(--secondary);
     font-weight: 500;
     font-size: 0.95rem;
-    transition: all 0.2s ease;
-    border: 1px solid transparent;
+    border-bottom: 3px solid transparent; /* legacy underline – kept neutral */
+    height: 100%;
     white-space: nowrap;
   }
 
+  /* No hover state per request */
   .nav-link:hover {
-    background: var(--background);
-    border-color: var(--border);
-    color: var(--accent);
+    color: var(--secondary);
+    background: transparent;
+    border-color: transparent;
   }
 
   .nav-link.active {
-    background: var(--accent);
-    color: var(--primary);
-    border-color: var(--accent);
+    color: var(--secondary);
+    background: var(--accent); /* full-height yellow box */
+    border-bottom-color: transparent; /* remove underline */
+    border-radius: 0; /* square edges */
   }
   .user-menu {
     display: flex;
@@ -228,49 +221,5 @@
     flex-shrink: 0;
   }
 
-  .logout-link {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    background: none;
-    border: none;
-    color: #666;
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    border-radius: 4px;
-  }
-
-  .logout-link:hover {
-    color: var(--accent);
-    background: var(--background);
-  }
-
-  .btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--background);
-    color: var(--secondary);
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .btn-secondary {
-    background: var(--background);
-    color: var(--secondary);
-  }
-  .btn-secondary:hover {
-    background: var(--primary);
-    border-color: var(--accent);    color: var(--accent);
-  }
+  /* Button styles use global tokens from app.css */
 </style>

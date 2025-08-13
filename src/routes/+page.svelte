@@ -346,9 +346,9 @@
   .auth-card {
     background: var(--primary);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 2rem;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    box-shadow: var(--shadow-sm);
   }
 
   .auth-header {
@@ -434,7 +434,7 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     margin-bottom: 1rem;
     font-size: 0.9rem;
   }
@@ -530,7 +530,7 @@
   .user-welcome {
     background: var(--primary);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 2rem;
     margin-bottom: 2rem;
   }
@@ -554,7 +554,7 @@
     padding: 1rem;
     background: var(--background);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .info-card div {
     font-size: 0.9rem;
@@ -572,7 +572,7 @@
     gap: 1rem;
     background: #fef3c7;
     border: 1px solid #f59e0b;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1.5rem;
     margin-bottom: 2rem;
     color: #92400e;
@@ -609,12 +609,12 @@
     display: block;
     background: var(--primary);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1.5rem;
     text-decoration: none;
     color: inherit;
     transition: all 0.2s ease;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    box-shadow: var(--shadow-sm);
   }
 
   .action-card:hover {

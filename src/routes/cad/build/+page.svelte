@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { supabase } from '$lib/supabase.js';
   import { userStore } from '$lib/stores/user.js';
-  import { Settings, Package, Wrench, CheckCircle, Clock, AlertTriangle, ExternalLink } from 'lucide-svelte';
+  import { Settings, Package, Wrench, CheckCircle, Clock, ExternalLink } from 'lucide-svelte';
   import { goto } from '$app/navigation';
 
   let user = null;
@@ -224,153 +224,59 @@
       <section class="section">
         <h2>All Builds</h2>
         {#if builds.length > 0}
-          <div class="builds-grid">            {#each builds as build}
+          <div class="builds-grid">
+            {#each builds as build}
               {@const progress = getBuildProgress(build)}
-              <div class="build-card status-{build.status}" 
-                   on:click={() => goto(`/cad/build/${build.id}`)} 
+              <div class="build-card status-{build.status}"
+                   on:click={() => goto(`/cad/build/${build.id}`)}
                    on:keydown={(e) => e.key === 'Enter' && goto(`/cad/build/${build.id}`)}
-                   role="button" 
-                   tabindex="0">                <div class="build-header">
-                  <Package size={20} />
+                   role="button"
+                   tabindex="0">
+                <div class="build-header">
+                  <div class="icon-wrap"><Package size={18} /></div>
                   <div class="build-info">
-                    <h3>{build.subsystems?.name || 'Unknown'} - {build.release_name}</h3>
-                    <p>Build #{build.build_hash?.split('_')[1] || 'N/A'}</p>                  </div>
-                  <div class="build-status">
-                    {#if build.status === 'pending'}
-                      <Clock size={16} />
-                      <span>{progress.status}</span>
-                    {:else if build.status === 'manufacturing'}
-                      <Wrench size={16} />
-                      <span>Manufacturing</span>
-                    {:else if build.status === 'ready_to_assemble'}
-                      <CheckCircle size={16} />
-                      <span>Ready</span>
-                    {:else if build.status === 'assembled'}
-                      <CheckCircle size={16} />
-                      <span>Assembled</span>
-                    {/if}
+                    <h3>{build.subsystems?.name || 'Unknown'} · {build.release_name}</h3>
+                    <p>Build #{build.build_hash?.split('_')[1] || 'N/A'}</p>
                   </div>
+                  <span class="status-badge status-{build.status}">
+                    {#if build.status === 'pending'}
+                      <Clock size={14} /> Pending
+                    {:else if build.status === 'manufacturing'}
+                      <Wrench size={14} /> in progress
+                    {:else if build.status === 'ready_to_assemble'}
+                      <CheckCircle size={14} /> Ready
+                    {:else if build.status === 'assembled'}
+                      <CheckCircle size={14} /> Assembled
+                    {/if}
+                  </span>
                 </div>
-                
+
                 <div class="progress-bar">
                   <div class="progress-fill" style="width: {progress.percent}%"></div>
                 </div>
-                
+
                 <div class="build-details">
-                  <p><strong>Progress:</strong> {progress.manufactured}/{progress.total} parts ({progress.percent}%)</p>
-                  <p><strong>Status:</strong> {progress.status}</p>
-                  <p><strong>Created:</strong> {new Date(build.created_at).toLocaleDateString()}</p>
-                  {#if build.assembled_at}
-                    <p><strong>Assembled:</strong> {new Date(build.assembled_at).toLocaleDateString()}</p>
-                  {/if}
-                </div>                <!-- PARTS TABLE FOR EACH BUILD -->
-                {#if (build.parts && build.parts.length > 0) || (build.purchasing && build.purchasing.length > 0)}
-                  <div class="parts-table-container" style="margin-top: 1.5rem;">
-                    <table class="parts-table">
-                      <thead>
-                        <tr>
-                          <th>Part Name</th>
-                          <th>Requester</th>
-                          <th>Qty</th>
-                          <th>Type</th>
-                          <th>Material</th>
-                          <th>Workflow</th>
-                          <th>Status</th>
-                          <th>Kitting Location</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each build.parts || [] as part}
-                          <tr>
-                            <td>{part.name}</td>
-                            <td>{part.requester}</td>
-                            <td>{part.quantity}</td>
-                            <td>
-                              <span class="part-type type-manufactured">
-                                Manufactured
-                              </span>
-                            </td>
-                            <td>{part.material || '-'}</td>
-                            <td>
-                              <span class="workflow-badge workflow-{part.workflow}">
-                                {part.workflow || '-'}
-                              </span>
-                            </td>
-                            <td>
-                              <span class="status-badge status-{part.status}">
-                                {#if part.status === 'complete'}
-                                  {#if part.delivered}
-                                    ✅ Complete & Delivered
-                                  {:else}
-                                    ⚠️ Complete (Not Delivered)
-                                  {/if}
-                                {:else if part.status === 'pending'}
-                                  ⏳ Pending
-                                {:else if part.status === 'in-progress'}
-                                  🔄 In Progress
-                                {:else if part.status === 'cammed'}
-                                  🔧 Cammed
-                                {:else}
-                                  {part.status}
-                                {/if}
-                              </span>
-                            </td>
-                            <td>
-                              {#if part.kitting_bin}
-                                <span class="kitting-location">
-                                  📦 {part.kitting_bin}
-                                </span>
-                              {:else}
-                                <span class="no-kitting">No location assigned</span>
-                              {/if}
-                            </td>
-                          </tr>
-                        {/each}
-                        {#each build.purchasing || [] as part}
-                          <tr>
-                            <td>{part.name}</td>
-                            <td>{part.requester}</td>
-                            <td>{part.quantity}</td>
-                            <td>
-                              <span class="part-type type-cots">
-                                COTS
-                              </span>
-                            </td>
-                            <td>{part.material || '-'}</td>
-                            <td>
-                              <span class="workflow-badge workflow-purchase">
-                                Purchase
-                              </span>
-                            </td>
-                            <td>
-                              <span class="status-badge status-{part.status}">
-                                {#if part.status === 'delivered'}
-                                  ✅ Delivered
-                                {:else if part.status === 'ordered'}
-                                  📦 Ordered
-                                {:else if part.status === 'pending'}
-                                  ⏳ Pending
-                                {:else}
-                                  {part.status}
-                                {/if}
-                              </span>
-                            </td>
-                            <td>
-                              <span class="no-kitting">-</span>
-                            </td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
+                  <div class="meta">
+                    <span>{progress.manufactured}/{progress.total} parts</span>
+                    <span>•</span>
+                    <span>{progress.percent}%</span>
+                    <span>•</span>
+                    <span>Created {new Date(build.created_at).toLocaleDateString()}</span>
+                    {#if build.assembled_at}
+                      <span>•</span>
+                      <span>Assembled {new Date(build.assembled_at).toLocaleDateString()}</span>
+                    {/if}
                   </div>
-                {/if}<div class="build-actions">
-                  <a href="/cad/build/{build.id}" class="btn btn-primary">
+                </div>
+
+                <div class="build-actions">
+                  <a href="/cad/build/{build.id}" class="btn btn-primary btn-sm">
                     <ExternalLink size={14} />
                     View Details
                   </a>
                   
                   {#if build.subsystems?.onshape_url}
-                    <a href={build.subsystems.onshape_url} target="_blank" class="btn btn-secondary">
+                    <a href={build.subsystems.onshape_url} target="_blank" class="btn btn-secondary btn-sm">
                       <ExternalLink size={14} />
                       View CAD
                     </a>
@@ -380,16 +286,16 @@
                   {#if build.status !== 'assembled'}
                     {@const progress = getBuildProgress(build)}
                     {#if progress.status === 'Ready'}
-                      <button class="btn btn-success" on:click|stopPropagation={() => markAsAssembled(build.id)}>
+                      <button class="btn btn-success btn-sm" on:click|stopPropagation={() => markAsAssembled(build.id)}>
                         <CheckCircle size={14} />
                         Build Finished
                       </button>
                     {/if}
                   {/if}
                 </div>
-            </div>
-          {/each}
-        </div>
+              </div>
+            {/each}
+          </div>
       {:else}        <div class="empty-state">
           <Package size={48} />
           <h3>No Builds Yet</h3>
@@ -401,7 +307,7 @@
             <li>Add parts to manufacturing or purchasing</li>
             <li>A build will be created automatically</li>
           </ol>
-          <a href="/cad" class="btn btn-primary">
+          <a href="/cad" class="btn btn-primary btn-sm">
             Go to CAD Subsystems
           </a>
         </div>
@@ -457,18 +363,8 @@
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
   }
-  .build-container {
-    max-width: 1200px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-  }
-  .page-header {
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-  }
+  .build-container { max-width: 1400px; margin: 0 auto; padding: 0 1rem 1rem; }
+  .page-header { background: var(--primary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; margin: 1rem 0; }
 
   .header-content {
     display: flex;
@@ -479,31 +375,31 @@
   .header-content h1 {
     margin: 0;
     color: var(--secondary);
-    font-size: 2rem;
+    font-size: 1.25rem;
   }
 
   .header-content p {
-    margin: 0.5rem 0 0 0;
+    margin: 0.25rem 0 0 0;
     color: #666;
-    font-size: 1.1rem;
+    font-size: 0.95rem;
   }
 
   .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-    margin-bottom: 2rem;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
   }
 
   .stat-card {
     background: var(--primary);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
+    border-radius: var(--radius-md);
+    padding: 0.75rem;
     display: flex;
     align-items: center;
-    gap: 1rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    gap: 0.75rem;
+    box-shadow: var(--shadow-sm);
   }
 
   .stat-info h3 {
@@ -521,59 +417,38 @@
   .build-sections {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    gap: 0.75rem;
   }
 
-  .section {
-    background: var(--primary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 2rem;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
+  .section { background: var(--primary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; box-shadow: var(--shadow-sm); }
 
   .section h2 {
-    margin: 0 0 1.5rem 0;
+    margin: 0 0 0.75rem 0;
     color: var(--secondary);
     font-size: 1.5rem;
   }
 
   .builds-grid {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 1rem;
   }
-  .build-card {
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: all 0.2s ease;
-    cursor: pointer;
-  }
+  .build-card { background: var(--surface, #fff); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem; transition: box-shadow 0.2s ease, transform 0.15s ease; cursor: pointer; }
 
   .build-card:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    border-color: var(--accent);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
     transform: translateY(-2px);
   }
 
-  .build-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
+  .build-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .icon-wrap { width: 28px; height: 28px; border-radius: 8px; background: #f3f4f6; display: inline-flex; align-items: center; justify-content: center; color: #6b7280; border: 1px solid #e5e7eb; }
 
   .build-info {
     flex: 1;
+    min-width: 0; /* allow flex child to shrink for truncation */
   }
 
-  .build-info h3 {
-    margin: 0;
-    color: var(--secondary);
-    font-size: 1.1rem;
-  }
+  .build-info h3 { margin: 0; color: var(--secondary); font-size: 1rem; font-weight: 600; }
 
   .build-info p {
     margin: 0.25rem 0 0 0;
@@ -581,55 +456,16 @@
     font-size: 0.9rem;
   }
 
-  .build-status {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    font-weight: 500;
-  }
+  .status-badge { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.78rem; font-weight: 600; border: 1px solid transparent; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; box-sizing: border-box; }
+  .status-badge.status-pending { background: #fff8e6; color: #8f5f00; border-color: #ffe199; }
+  .status-badge.status-manufacturing { background: #eaf3ff; color: #1e60d1; border-color: #b6d3ff; }
+  .status-badge.status-ready_to_assemble { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+  .status-badge.status-assembled { background: #e8f6ef; color: #11642a; border-color: #a7e0c1; }
 
-  .status-in-progress .build-status {
-    background: #e3f2fd;
-    color: #1976d2;
-  }
+  .progress-bar { width: 100%; height: 8px; background: #eef2f7; border-radius: 999px; overflow: hidden; margin-bottom: 0.75rem; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #ffd54f, #ffb300); transition: width 0.3s ease; }
 
-  .status-pending .build-status {
-    background: #fff3e0;
-    color: var(--warning);
-  }
-
-  .status-completed .build-status {
-    background: #e8f5e8;
-    color: var(--success);
-  }
-
-  .progress-bar {
-    width: 100%;
-    height: 8px;
-    background: var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-    margin-bottom: 1rem;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.3s ease;
-  }
-
-  .status-completed .progress-fill {
-    background: var(--success);
-  }
-
-  .build-details p {
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-    color: #666;
-  }
+  .build-details .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; color: #6b7280; font-size: 0.85rem; }
 
   .build-actions {
     display: flex;
@@ -640,7 +476,7 @@
 
   .empty-state {
     text-align: center;
-    padding: 3rem;
+    padding: 1.5rem;
     color: #666;
   }
 
@@ -687,74 +523,9 @@
     line-height: 1.5;
   }
 
-  .qc-checklist {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
+  /* Removed unused checklist styles */
 
-  .checklist-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-  }
-
-  .check-icon.completed {
-    color: var(--success);
-  }
-
-  .check-icon.pending {
-    color: var(--warning);
-  }
-
-  .checklist-content h4 {
-    margin: 0;
-    color: var(--secondary);
-    font-size: 1rem;
-  }
-
-  .checklist-content p {
-    margin: 0.25rem 0 0 0;
-    color: #666;
-    font-size: 0.9rem;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--background);
-    color: var(--secondary);
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .btn-primary {
-    background: var(--accent);
-    color: var(--secondary);
-    border-color: var(--accent);
-  }
-
-  .btn-primary:hover {
-    background: #d4a829;
-    border-color: #d4a829;
-  }
-
-  .btn-secondary:hover {
-    background: var(--primary);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
+  /* Buttons use global styles from app.css */
 
   .error-container {
     display: flex;
@@ -764,164 +535,16 @@
     text-align: center;
   }
 
-  /* Parts table styles */
-  .parts-table-container {
-    max-height: 300px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    margin-top: 1rem;
-  }
-
-  .parts-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-  }
-
-  .parts-table th,
-  .parts-table td {
-    padding: 0.6rem 0.8rem;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .parts-table th {
-    background: #f8f9fa;
-    font-weight: 600;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  .parts-table tr:hover {
-    background: rgba(0, 0, 0, 0.02);
-  }
-
-  .part-type {
-    padding: 0.25rem 0.5rem;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: 500;
-  }
-
-  .part-type.type-cots {
-    background: #fff8e1;
-    color: #f57f17;
-    border: 1px solid #ffcc02;
-  }
-
-  .part-type.type-manufactured {
-    background: #e1f5fe;
-    color: #0277bd;
-    border: 1px solid #81d4fa;
-  }
-
-  .workflow-badge {
-    padding: 0.25rem 0.5rem;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: 500;
-    background: #f0f0f0;
-    color: #333;
-  }
-
-  .workflow-badge.workflow-3d-print {
-    background: #e8f5e8;
-    color: #2e7d32;
-  }
-
-  .workflow-badge.workflow-laser-cut {
-    background: #fff3e0;
-    color: #f57c00;
-  }
-
-  .workflow-badge.workflow-mill {
-    background: #e3f2fd;
-    color: #1976d2;
-  }
-
-  .workflow-badge.workflow-lathe {
-    background: #f3e5f5;
-    color: #7b1fa2;
-  }
-
-  .workflow-badge.workflow-router {
-    background: #fce4ec;
-    color: #c2185b;
-  }
-
-  .status-badge {
-    padding: 0.25rem 0.5rem;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: 500;
-  }
-
-  .status-badge.status-pending {
-    background: #fff8e1;
-    color: #f57f17;
-  }
-
-  .status-badge.status-manufactured {
-    background: #e8f5e8;
-    color: #2e7d32;
-  }
-
-  .status-badge.status-delivered {
-    background: #e8f5e8;
-    color: #2e7d32;
-  }
-
-  .status-badge.status-in-progress {
-    background: #e3f2fd;
-    color: #1976d2;
-  }
-
-  .status-badge.status-cammed {
-    background: #f3e5f5;
-    color: #7b1fa2;
-  }
-
-  .status-badge.status-ordered {
-    background: #fff3e0;
-    color: #f57c00;
-  }
-
-  .status-badge.status-complete {
-    background: #e8f5e8;
-    color: #2e7d32;
-  }
-
-  .kitting-location {
-    padding: 0.25rem 0.5rem;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: 500;
-    background: #e3f2fd;
-    color: #1976d2;
-    border: 1px solid #90caf9;
-  }
-
-  .no-kitting {
-    color: #9e9e9e;
-    font-style: italic;
-    font-size: 0.7rem;
-  }
-
-  .parts-table th:nth-child(8),
-  .parts-table td:nth-child(8) {
-    min-width: 120px;
-  }
+  /* Removed per-build parts table styles in favor of compact cards */
 
   @media (max-width: 768px) {
     .build-container {
-      margin: 1rem;
+      margin: 0;
       padding: 0;
     }
 
     .page-header {
-      padding: 1.5rem;
+      padding: 0.75rem;
     }
 
     .header-content {
@@ -935,7 +558,7 @@
     }
 
     .section {
-      padding: 1.5rem;
+      padding: 0.75rem;
     }
 
     .tools-grid {

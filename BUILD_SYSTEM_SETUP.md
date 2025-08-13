@@ -1,71 +1,41 @@
 # Database Setup for Build System
 
-## IMPORTANT: CORRECT ARCHITECTURE
+This app uses a hybrid approach that keeps builds lightweight while preserving the full BOM for editing:
 
-**The build system uses the CORRECT approach:**
-- ✅ **`parts` table** - Contains all manufacturing parts (unchanged)
-- ✅ **`purchasing` table** - Contains all COTS parts (unchanged) 
-- ✅ **`builds` table** - Contains a `part_ids` array column that references IDs from parts/purchasing tables
-- ❌ **NO `build_bom` table** - This was a mistake and has been corrected
+- parts table – Source of truth for manufactured parts
+- purchasing table – Source of truth for COTS items
+- builds.part_ids – References IDs from parts and purchasing to compute progress/kitting
+- build_bom table – Stores the full BOM captured from Onshape as part_type='other' so items can be promoted later
 
-## Required Database Migration
+Important note: Do not drop build_bom. It’s used to persist the full BOM and manage “Other Items.”
 
-Run the **CORRECTED** migration to fix the database structure:
+## Migration order (run in Supabase SQL Editor)
 
-### Step 1: Run the Fix Migration
+Run these migrations in order:
 
-Execute this migration in your Supabase SQL editor:
+1) migration_add_build_system.sql
+  - Creates build_bom and purchasing tables, adds constraints and indexes, and enables RLS/policies
+2) migration_add_other_category.sql
+  - Updates build_bom.part_type to allow 'other' and adds an index for faster queries
+3) migration_add_drawing_support.sql
+  - Adds parts.onshape_drawing_element_id for drawing-to-PDF in manufacturing
 
-1. Open your Supabase project dashboard
-2. Go to the SQL Editor  
-3. Copy and paste the contents of `migration_fix_builds.sql`
-4. Click "Run" to execute
+Optional / already present:
+- migration_minimal.sql and supabase.sql are reference scaffolds (not always required on an existing DB)
 
-This will:
-- ✅ Remove the incorrect `build_bom` table  
-- ✅ Add `part_ids integer[]` column to `builds` table
-- ✅ Create helper functions for managing builds
-- ✅ Set up proper indexes
+Deprecated, do not run:
+- migration_fix_builds.sql – This drops build_bom and is no longer applicable to the current architecture
 
-### Step 2: How It Works
+## How the flow works
 
-**Correct Architecture:**
-1. Parts are added to `parts` table (manufacturing) or `purchasing` table (COTS)
-2. The part IDs are added to the `part_ids` array in the `builds` table
-3. Build progress is calculated by looking up the actual parts by their IDs
-4. Kitting locations come from the `parts` table `kitting_bin` field
+1. When you create a build from a BOM, the app stores the entire BOM into build_bom as part_type='other' (doesn’t affect progress).
+2. From Build Details, you can promote “Other Items” to manufacturing or purchasing.
+3. When promoted, the app inserts records into parts/purchasing, and the IDs are added to builds.part_ids.
+4. Build progress and kitting are computed strictly from parts/purchasing via part_ids, not from build_bom.
 
-**Example:**
-```sql
--- Build references parts by ID
-builds: {
-  id: "uuid",
-  part_ids: [123, 124, 125],  -- References parts.id and purchasing.id
-  ...
-}
+## Quick test
 
--- Parts table has the actual part data
-parts: {
-  id: 123,
-  name: "18t HTD pulley", 
-  status: "complete",
-  kitting_bin: "A1-5",
-  ...
-}
-```
-
-### Step 3: Test the System
-
-1. Go to a CAD subsystem BOM page
-2. Add a manufactured part - creates entry in `parts` table and adds ID to build
-3. Add COTS parts - creates entries in `purchasing` table and adds IDs to build  
-4. Check the Build page to see parts with real status and kitting locations
-
-## What This Fixes
-
-- ✅ No duplicate part tracking tables
-- ✅ Parts table remains the single source of truth for manufacturing
-- ✅ Purchasing table remains the single source of truth for COTS
-- ✅ Builds just reference existing parts by ID
-- ✅ Real-time status updates from actual manufacturing/purchasing progress
-- ✅ Kitting locations from actual manufacturing data
+- Visit a CAD subsystem and create a build from a version/BOM
+- Open Build Details and verify the “Other Items” list
+- Promote one item to manufacturing and one to purchasing
+- Check that build progress now reflects those promoted items only

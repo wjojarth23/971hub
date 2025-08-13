@@ -31,7 +31,7 @@
     await loadParts();
   });
 
-  // Fixed drag and drop handlers for better Vercel compatibility
+  // Fixed drag and drop handlers for better Vercel compatibility (kept for potential future use)
   function handleDragOver(event) {
     event.preventDefault();
     event.currentTarget.classList.add('active');
@@ -41,6 +41,7 @@
     event.preventDefault();
     event.currentTarget.classList.remove('active');
   }
+
   async function loadParts() {
     try {
       // Use the new view that includes Onshape parameters and download URLs
@@ -58,11 +59,9 @@
       loading = false;
     }
   }
+
   async function downloadFile(part, currentStatus) {
     try {
-      console.log('Attempting to download file for part:', part.name);
-      console.log('Part source type:', part.source_type);
-      
       // If part is still "pending", automatically mark it as "in-progress"
       if (currentStatus === 'pending') {
         await updatePartStatus(part.id, 'in-progress');
@@ -79,23 +78,60 @@
       console.error('Error downloading file:', error);
       alert(`Error downloading file: ${error.message}`);
     }
-  }  async function downloadFromOnshape(part) {
-    try {
-      console.log('Downloading from Onshape API for part:', part.name);
-      console.log('Part data:', {
-        name: part.name,
-        workflow: part.workflow,
-        file_format: part.file_format,
-        onshape_document_id: part.onshape_document_id,
-        onshape_element_id: part.onshape_element_id,
-        onshape_part_id: part.onshape_part_id,
-        onshape_wvm: part.onshape_wvm,
-        onshape_wvmid: part.onshape_wvmid
-      });
+  }
 
+  async function downloadFromOnshape(part) {
+    try {
       // Special handling for laser cutter - download SVG instead of STEP
       if (part.workflow === 'laser-cut') {
         await downloadSVGForLaser(part);
+        return;
+      }
+
+      // For lathe/mill, fetch drawing PDF via Onshape drawing translation
+      if (part.workflow === 'lathe' || part.workflow === 'mill') {
+        // We expect the drawing element id stored on the part record
+        let drawingEid = part.onshape_drawing_element_id;
+        if (!drawingEid) {
+          // Fallback: the parts_with_download_urls view may be outdated and not include this newer column.
+          // In that case, fetch the value directly from the base 'parts' table.
+          const { data: partRow, error: partErr } = await supabase
+            .from('parts')
+            .select('onshape_drawing_element_id')
+            .eq('id', part.id)
+            .single();
+          if (!partErr && partRow && partRow.onshape_drawing_element_id) {
+            drawingEid = partRow.onshape_drawing_element_id;
+          }
+        }
+        if (!drawingEid) {
+          alert('This part requires a drawing. No drawing URL/EID found.');
+          return;
+        }
+        const params = new URLSearchParams({
+          action: 'translate-drawing',
+          documentId: part.onshape_document_id,
+          elementId: drawingEid,
+          wvm: part.onshape_wvm || 'v',
+          wvmId: part.onshape_wvmid
+        });
+        showToastMessage('Generating drawing PDF...');
+        const resp = await fetch(`/api/onshape?${params}`);
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `Failed to create drawing PDF (${resp.status})`);
+        }
+        const blob = await resp.blob();
+        const fileName = `${part.name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        showToastMessage('Drawing PDF downloaded.');
         return;
       }
 
@@ -113,19 +149,16 @@
         format: part.file_format === 'stl' ? 'STL' : 'STEP'
       });
       
-      console.log('API parameters:', Object.fromEntries(params.entries()));
-      console.log('Full API URL:', `/api/onshape?${params}`);
-      
       showToastMessage('Download requested...');
       
       const response = await fetch(`/api/onshape?${params}`);
       
       if (!response.ok) {
         const errorData = await response.json();
-        console.error('API Error Response:', errorData);
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-        // Create blob and download
+
+      // Create blob and download
       const blob = await response.blob();
       const fileExt = part.file_format === 'stl' ? 'stl' : 'step';
       const fileName = `${part.name.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExt}`;
@@ -139,7 +172,6 @@
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       
-      console.log('Onshape file downloaded successfully:', fileName);
       showToastMessage(`${fileExt.toUpperCase()} file downloaded successfully!`);
     } catch (error) {
       console.error('Error downloading from Onshape:', error);
@@ -147,9 +179,9 @@
       throw error;
     }
   }
+
   async function downloadFromStorage(fileName, partId) {
     try {
-      console.log('Downloading from storage bucket:', fileName);
       showToastMessage('Download requested...');
       
       // Try to create signed URL for the filename as stored
@@ -159,9 +191,7 @@
       
       // If that fails, it might be URL encoded, so try decoding it
       if (error && error.message.includes('Object not found')) {
-        console.log('First attempt failed, trying decoded filename...');
         const decodedFileName = decodeURIComponent(fileName);
-        console.log('Decoded filename:', decodedFileName);
         const result = await supabase.storage
           .from('manufacturing-files')
           .createSignedUrl(decodedFileName, 60);
@@ -170,8 +200,6 @@
       }
       
       if (error) throw error;
-      
-      console.log('Signed URL generated successfully:', data.signedUrl);
       
       // Open the signed URL in a new tab
       window.open(data.signedUrl, '_blank');
@@ -189,15 +217,11 @@
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}_gcode_${partId}.${fileExt}`;
       
-      console.log('Uploading G-code file:', fileName);
-      
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('manufacturing-files')
         .upload(fileName, file);
       
       if (uploadError) throw uploadError;
-      
-      console.log('G-code file uploaded successfully:', uploadData.path);
       
       // Get the public URL for the uploaded file
       const { data: { publicUrl } } = supabase.storage
@@ -236,7 +260,7 @@
   function handleGcodeDrop(event, partId) {
     event.preventDefault();
     event.currentTarget.classList.remove('active');
-      const files = event.dataTransfer.files;
+    const files = event.dataTransfer.files;
     if (files.length > 0) {
       const file = files[0];
       const fileExtension = file.name.split('.').pop().toLowerCase();
@@ -249,6 +273,11 @@
       
       uploadGcodeFile(partId, file);
     }
+  }
+
+  function triggerGcodeInput(partId) {
+    const el = document.getElementById(`gcode-upload-${partId}`);
+    if (el) el.click();
   }
 
   async function updatePartStatus(partId, newStatus) {
@@ -316,6 +345,14 @@
     }
     return part.status;
   }
+
+  function getStatusBadgeClass(status) {
+    if (status === 'in-progress') return 'status-progress';
+    if (status === 'cammed') return 'status-cammed';
+    if (status === 'complete') return 'status-complete';
+    return 'status-pending';
+  }
+
   async function exportToCSV() {
     try {
       // Fetch all parts data from the view
@@ -422,7 +459,6 @@
   // SVG download function for laser cutter
   async function downloadSVGForLaser(part) {
     try {
-      console.log('Downloading SVG for laser cutter, part:', part.name);
       showToastMessage('Download requested - Converting to SVG...');
       
       // Build the API URL for SVG conversion
@@ -435,14 +471,10 @@
         wvmId: part.onshape_wvmid
       });
       
-      console.log('SVG API parameters:', Object.fromEntries(params.entries()));
-      console.log('Full SVG API URL:', `/api/onshape?${params}`);
-      
       const response = await fetch(`/api/onshape?${params}`);
       
       if (!response.ok) {
         const errorData = await response.json();
-        console.error('SVG API Error Response:', errorData);
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
       
@@ -459,7 +491,6 @@
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       
-      console.log('SVG file downloaded successfully:', fileName);
       showToastMessage('SVG file downloaded successfully!');
     } catch (error) {
       console.error('Error downloading SVG:', error);
@@ -472,17 +503,17 @@
   <title>Parts List - Manufacturing Management</title>
 </svelte:head>
 
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+<div class="page-header">
   <h1>Parts List</h1>
-  <div style="display: flex; gap: 10px;">
-    <a href="/create" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; gap: 8px;">
+  <div class="page-actions">
+    <a href="/create" class="btn btn-primary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
       <Upload size={16} />
       Create New Part
     </a>
     <button
       class="btn btn-secondary"
       on:click={exportToCSV}
-      style="display: flex; align-items: center; gap: 8px;"
+      style="display: inline-flex; align-items: center; gap: 8px;"
     >
       <Download size={16} />
       Export CSV
@@ -542,131 +573,145 @@
     <p>No parts found. {parts.length === 0 ? 'Create your first part!' : 'Try adjusting your filters.'}</p>
   </div>
 {:else}
-  <div class="parts-grid">
-    {#each filteredParts as part (part.id)}
-      <div class="card part-card">
-        <div class="part-header">
-          <div class="part-info">
-            <h3>{part.name}</h3>
-            <div class="workflow-badge">
-              <svelte:component this={getWorkflowIcon(part.workflow)} size={16} />
-              {getWorkflowLabel(part.workflow)}
-            </div>
-          </div>
-          <div class="status-badge status-{part.status}">
-            {getStatusDisplay(part)}
-          </div>
-        </div>
-        
-        <div class="part-details">
-          <p><strong>Requester:</strong> {part.requester}</p>
-          <p><strong>Project ID:</strong> {part.project_id}</p>
-          <p><strong>Quantity:</strong> {part.quantity || 1}x</p>          {#if part.material}
-            <p><strong>Material:</strong> {part.material}</p>
-          {/if}
-          <p><strong>Created:</strong> {formatDate(part.created_at)}</p>          {#if part.source_type === 'onshape_api'}            <p><strong>Source:</strong> 
-              <span class="onshape-badge">
-                {#if part.workflow === 'laser-cut'}
-                  SVG
-                {:else}
-                  Onshape ({part.file_format === 'stl' ? 'STL' : 'STEP'})
-                {/if}
-              </span>
-            </p>
-            <p><strong>Version:</strong> {part.onshape_wvm}/{part.onshape_wvmid}</p>
-            <p>              <button 
-                class="file-link download-btn" 
-                on:click={() => downloadFile(part, part.status)}
-                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
-              >
-                Download {part.workflow === 'laser-cut' ? 'SVG' : (part.file_format === 'stl' ? 'STL' : 'STEP')} file
-              </button>
-            </p>
-          {:else if part.file_name}
-            <p><strong>File:</strong> 
-              <button 
-                class="file-link" 
-                on:click={() => downloadFromStorage(part.file_name, part.id)}
-                style="background: none; border: none; color: var(--color-accent); text-decoration: underline; cursor: pointer;"
-              >
-                Download {part.file_name}
-              </button>
-            </p>
-          {/if}
-          {#if part.gcode_file_name}
-            <p><strong>G-code File:</strong> 
-              <a 
-                href={part.gcode_file_url}
-                target="_blank"
-                class="file-link"
-              >
-                Download {part.gcode_file_name}
-              </a>
-            </p>
-          {/if}
-          {#if part.kitting_bin}
-            <p><strong>Kitting Bin:</strong> {part.kitting_bin}</p>
-          {/if}
-          {#if part.delivered}
-            <p><strong>Status:</strong> Delivered</p>
-          {/if}
-        </div>
-        
-        {#if part.status === 'pending' || part.status === 'in-progress' || (part.status === 'cammed' && part.workflow === 'router')}
-          <div class="part-actions">
-            {#if part.status === 'pending'}
-              <button
-                class="btn btn-secondary"
-                on:click={() => updatePartStatus(part.id, 'in-progress')}
-              >
-                <Clock size={16} />
-                Start Work
-              </button>
-            {:else if part.status === 'in-progress'}
-              {#if part.workflow === 'router'}
-                <div class="router-cam-section">
-                  <p><strong>Step 1:</strong> Download STEP file above</p>
-                  <p><strong>Step 2:</strong> Upload G-code file after CAM processing</p>
-                    <div class="gcode-upload">
-                    <label class="form-label" for="gcode-upload-{part.id}">Upload G-code File:</label>
-                    <div class="file-upload-area" 
-                         on:click={() => document.getElementById(`gcode-upload-${part.id}`).click()}
-                         on:dragover={handleDragOver}
-                         on:dragleave={handleDragLeave}
-                         on:drop={(e) => handleGcodeDrop(e, part.id)}
-                         role="button"
-                         tabindex="0"
-                         on:keydown={(e) => {
-                           if (e.key === 'Enter' || e.key === ' ') {
-                             document.getElementById(`gcode-upload-${part.id}`).click();
-                           }
-                         }}>
-                      <input
-                        id="gcode-upload-{part.id}"
-                        type="file"
-                        accept=".gcode,.nc,.cnc,.tap"
-                        class="file-input-hidden"
-                        on:change={(e) => handleGcodeFileUpload(e, part.id)}
-                      />
-                      <Upload size={32} />
-                      <span class="upload-text">Drop your G-code file here or click to browse</span>
-                      <span class="file-info">Only G-code files are accepted (.gcode, .nc, .cnc, .tap)</span>
-                    </div>
-                  </div>
+  <div class="table-container">
+    <table class="table">
+      <thead>
+        <tr>
+          <th class="name-col">Name</th>
+          <th>Workflow</th>
+          <th class="mono">Project ID</th>
+          <th>Qty</th>
+          <th>Material</th>
+          <th class="source-col">Source</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each filteredParts as part (part.id)}
+          <tr>
+            <td class="name-col"><strong>{part.name}</strong></td>
+            <td>
+              <div class="workflow-badge">
+                <svelte:component this={getWorkflowIcon(part.workflow)} size={14} />
+                {getWorkflowLabel(part.workflow)}
+              </div>
+            </td>
+            <td class="mono">{part.project_id}</td>
+            <td>{part.quantity || 1}</td>
+            <td class="text-muted">{part.material || '-'}</td>
+            <td class="source-col">
+              {#if part.source_type === 'onshape_api'}
+                <div class="source-cell">
+                  <span class="source-tag">
+                    {#if part.workflow === 'laser-cut'}
+                      SVG
+                    {:else if part.workflow === 'lathe' || part.workflow === 'mill'}
+                      PDF
+                    {:else}
+                      {part.file_format === 'stl' ? 'STL' : 'STEP'}
+                    {/if}
+                  </span>
+                  <button class="btn btn-secondary btn-icon" aria-label="Download" title="Download" on:click={() => downloadFile(part, part.status)}>
+                    <Download size={16} />
+                  </button>
+                </div>
+              {:else if part.file_name}
+                <div class="source-cell">
+                  <span class="file-label">{part.file_name}</span>
+                  <button class="btn btn-secondary btn-icon" aria-label="Download" title="Download" on:click={() => downloadFromStorage(part.file_name, part.id)}>
+                    <Download size={16} />
+                  </button>
                 </div>
               {:else}
-                <div class="complete-actions">
+                <span class="text-muted">-</span>
+              {/if}
+            </td>
+            <td>
+              <span class="status-badge {getStatusBadgeClass(part.status)} status-table status-fade">{getStatusDisplay(part)}</span>
+            </td>
+            <td>{formatDate(part.created_at)}</td>
+            <td>
+              {#if part.status === 'pending'}
+                <button
+                  class="btn btn-secondary btn-sm"
+                  on:click={() => updatePartStatus(part.id, 'in-progress')}
+                  title="Start Work"
+                >
+                  <Clock size={14} />
+                  Start
+                </button>
+              {:else if part.status === 'in-progress'}
+                {#if part.workflow === 'router'}
+                  <div class="actions-col">
+                    <input
+                      id="gcode-upload-{part.id}"
+                      type="file"
+                      accept=".gcode,.nc,.cnc,.tap,.ngc"
+                      class="file-input-hidden"
+                      on:change={(e) => handleGcodeFileUpload(e, part.id)}
+                    />
+                    <button
+                      class="btn btn-secondary btn-sm"
+                      on:click={() => triggerGcodeInput(part.id)}
+                      title="Upload G-code"
+                    >
+                      <Upload size={14} />
+                      Upload G-code
+                    </button>
+                  </div>
+                {:else}
+                  <div class="actions-col">
+                    <button
+                      class="btn btn-primary btn-sm"
+                      on:click={() => completePart(part.id, 'delivered')}
+                      title="Mark Delivered"
+                    >
+                      <Truck size={14} />
+                      Delivered
+                    </button>
+                    <div class="kitting-inline">
+                      <input
+                        type="text"
+                        placeholder="Bin ID"
+                        class="form-input kitting-input"
+                        on:keydown={(e) => {
+                          if (e.key === 'Enter' && e.target.value.trim()) {
+                            completePart(part.id, 'kitting-bin', e.target.value.trim());
+                          }
+                        }}
+                      />
+                      <button
+                        class="btn btn-secondary btn-sm btn-nowrap"
+                        on:click={(e) => {
+                          const input = e.target.previousElementSibling;
+                          if (input && input.value.trim()) {
+                            completePart(part.id, 'kitting-bin', input.value.trim());
+                          }
+                        }}
+                        title="Move to Bin"
+                      >
+                        <Package size={14} />
+                        Kit
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              {:else if part.status === 'cammed' && part.workflow === 'router'}
+                <div class="actions-col">
                   <button
-                    class="btn"
+                    class="btn btn-primary btn-sm"
                     on:click={() => completePart(part.id, 'delivered')}
+                    title="Mark Delivered"
                   >
-                    <Truck size={16} />
-                    Mark Delivered
+                    <Truck size={14} />
+                    Delivered
                   </button>
-                  <div class="kitting-action">
+                  <div class="kitting-inline">
                     <input
                       type="text"
-                      placeholder="Kitting Bin ID"
+                      placeholder="Bin ID"
                       class="form-input kitting-input"
                       on:keydown={(e) => {
                         if (e.key === 'Enter' && e.target.value.trim()) {
@@ -675,59 +720,26 @@
                       }}
                     />
                     <button
-                      class="btn btn-secondary"
+                      class="btn btn-secondary btn-sm btn-nowrap"
                       on:click={(e) => {
                         const input = e.target.previousElementSibling;
-                        if (input.value.trim()) {
+                        if (input && input.value.trim()) {
                           completePart(part.id, 'kitting-bin', input.value.trim());
                         }
                       }}
+                      title="Move to Bin"
                     >
-                      <Package size={16} />
-                      To Bin
+                      <Package size={14} />
+                      Kit
                     </button>
                   </div>
                 </div>
               {/if}
-            {:else if part.status === 'cammed' && part.workflow === 'router'}
-              <div class="complete-actions">
-                <button
-                  class="btn"
-                  on:click={() => completePart(part.id, 'delivered')}
-                >
-                  <Truck size={16} />
-                  Mark Delivered
-                </button>
-                <div class="kitting-action">
-                  <input
-                    type="text"
-                    placeholder="Kitting Bin ID"
-                    class="form-input kitting-input"
-                    on:keydown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        completePart(part.id, 'kitting-bin', e.target.value.trim());
-                      }
-                    }}
-                  />
-                  <button
-                    class="btn btn-secondary"
-                    on:click={(e) => {
-                      const input = e.target.previousElementSibling;
-                      if (input.value.trim()) {
-                        completePart(part.id, 'kitting-bin', input.value.trim());
-                      }
-                    }}
-                  >
-                    <Package size={16} />
-                    To Bin
-                  </button>
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/each}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
   </div>
 {/if}
 
@@ -739,158 +751,152 @@
 {/if}
 
 <style>
+  /* Uses global .page-header and .page-actions from app.css */
+
   .filters {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;
     gap: 1rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.25rem;
   }
-  
-  .parts-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-    gap: 1rem;
+
+
+  /* --- BOM-style Table Styling --- */
+  /* Tables: rely on global .table/.table-container styles */
+  .table tr { background: white; }
+  .table tbody tr:nth-child(even) { background: #fcfcfc; }
+
+  /* Skinnier columns for Name and Source */
+  .table th.name-col,
+  .table td.name-col {
+    min-width: 120px;
+    max-width: 180px;
+    width: 1%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  
-  .part-card {
-    border: 1px solid var(--border);
-    border-radius: 4px;
+  .table th.source-col,
+  .table td.source-col {
+  min-width: 80px;
+  max-width: 120px;
+    width: 1%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  
-  .part-header {
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+
+  /* Table-specific cell styles */
+
+  /* Remove old .name-col min-width, handled above */
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+
+  .source-cell {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    min-width: 0;
+  max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  
-  .part-info h3 {
-    margin: 0 0 0.5rem 0;
-    color: var(--secondary);
+
+  .btn-icon { border: 1px solid var(--border); background: var(--background); }
+
+  .version-text {
+    font-size: 0.75rem;
+    color: #666;
   }
-  
+
+  .file-label {
+  max-width: 100px;
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  /* Button sizing relies on .btn-sm globally */
+
+  .actions-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 140px;
+  }
+
+  .kitting-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .kitting-input {
+    min-width: 120px;
+    margin: 0;
+    padding: 0.5rem 0.5rem;
+  }
+
   .workflow-badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.375rem;
     background: var(--background);
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
     font-weight: 500;
     border: 1px solid var(--border);
+    color: var(--secondary);
   }
-  
-  .part-details {
-    margin-bottom: 1rem;
-  }
-  
-  .part-details p {
-    margin: 0.25rem 0;
-    font-size: 0.9rem;
-  }
-  
-  .file-link {
-    color: var(--accent);
-    text-decoration: none;
-    font-weight: 500;
-  }
-    .file-link:hover {
-    text-decoration: underline;
-  }
-  
-  .onshape-badge {
+
+
+  .source-tag {
     display: inline-flex;
     align-items: center;
-    background: #f1c331;
-    color: #333;
-    padding: 0.125rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-  
-  .download-btn {
-    font-weight: 600;
-  }
-  
-  .part-actions {
-    border-top: 1px solid var(--border);
-    padding-top: 1rem;
-  }
-  
-  .complete-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .kitting-action {
-    display: flex;
-    gap: 0.5rem;
-  }
-  
-  .kitting-input {
-    flex: 1;
-    margin: 0;
-  }
-  
-  .router-cam-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .router-cam-section p {
-    margin: 0;
-    font-size: 0.9rem;
-    color: var(--text);
-  }
-  
-  .gcode-upload {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  
-  .file-upload-area {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
     justify-content: center;
-    padding: 2rem;
-    border: 2px dashed var(--border);
+    height: 32px;
+    padding: 0 0.75rem;
     border-radius: 4px;
-    background: var(--background);
-    cursor: pointer;
-    transition: all 0.2s;
-    text-align: center;
-    gap: 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: #e3e8f0;
+    color: #333;
+    border: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    margin-right: 0.25rem;
   }
-  
-  .file-upload-area:hover,
-  .file-upload-area.active {
-    border-color: var(--accent);
-    background: rgba(241, 195, 49, 0.1);
-  }
-  
+
+  /* Remove ad-hoc .btn-table; using .btn btn-sm variants */
+
+  /* Status badges: keep compact row height */
+  .status-badge.status-table { display: inline-flex; align-items: center; height: 32px; min-width: 80px; }
+  /* Provide badge background variables for fade to pick up */
+  .status-badge.status-table.status-pending { --badge-bg: var(--warning); }
+  .status-badge.status-table.status-progress { --badge-bg: #007bff; }
+  .status-badge.status-table.status-cammed { --badge-bg: #6f42c1; }
+  .status-badge.status-table.status-complete { --badge-bg: var(--success); }
+
+  .text-muted { color: #6b7280; }
+
   .file-input-hidden {
     display: none;
   }
-  
-  .upload-text {
-    font-size: 1rem;
-    font-weight: 500;
-    color: var(--secondary);
-  }
-  
-  .file-info {
-    font-size: 0.8rem;
-    color: #666;
-    font-style: italic;
-  }
-  
+
   /* Toast Notification Styles */
   .toast {
     position: fixed;
@@ -900,8 +906,8 @@
     background: var(--secondary);
     color: var(--primary);
     padding: 12px 24px;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
     z-index: 1000;
     font-weight: 500;
     animation: slideUp 0.3s ease-out;
@@ -918,17 +924,30 @@
     }
   }
 
-  @media (max-width: 768px) {
+  @media (max-width: 900px) {
     .filters {
       grid-template-columns: 1fr;
     }
-    
-    .parts-grid {
-      grid-template-columns: 1fr;
+    .actions-col {
+      min-width: auto;
     }
-    
-    .kitting-action {
-      flex-direction: column;
+    .table th.name-col,
+    .table td.name-col {
+      min-width: 80px;
+      max-width: 100px;
+    }
+    .table th.source-col,
+    .table td.source-col {
+      min-width: 70px;
+      max-width: 100px;
+    }
+    .table thead th:nth-child(6),
+    .table tbody td:nth-child(6) { /* Material */
+      display: none;
+    }
+    .table thead th:nth-child(9),
+    .table tbody td:nth-child(9) { /* Created */
+      display: none;
     }
   }
 </style>

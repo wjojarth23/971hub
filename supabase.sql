@@ -1,6 +1,44 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.allowed_external_ips (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  ip_address inet NOT NULL UNIQUE,
+  location_name character varying NOT NULL,
+  description text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT allowed_external_ips_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.build_bom (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  build_id uuid NOT NULL,
+  part_name character varying NOT NULL,
+  part_number character varying,
+  quantity integer NOT NULL DEFAULT 1,
+  part_type character varying NOT NULL CHECK (part_type::text = ANY (ARRAY['COTS'::character varying::text, 'manufactured'::character varying::text, 'other'::character varying::text])),
+  material character varying,
+  stock_assignment character varying,
+  workflow character varying,
+  bounding_box_x numeric,
+  bounding_box_y numeric,
+  bounding_box_z numeric,
+  onshape_part_id character varying,
+  status character varying DEFAULT 'pending'::character varying CHECK (status::text = ANY (ARRAY['pending'::character varying::text, 'ordered'::character varying::text, 'delivered'::character varying::text, 'manufactured'::character varying::text, 'in-progress'::character varying::text, 'cammed'::character varying::text, 'complete'::character varying::text])),
+  added_to_parts_list boolean DEFAULT false,
+  added_to_purchasing boolean DEFAULT false,
+  onshape_document_id character varying,
+  onshape_wvm character varying,
+  onshape_wvmid character varying,
+  onshape_element_id character varying,
+  file_format character varying CHECK (file_format::text = ANY (ARRAY['stl'::character varying::text, 'parasolid'::character varying::text, 'step'::character varying::text, 'iges'::character varying::text])),
+  is_onshape_part boolean DEFAULT false,
+  file_url text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT build_bom_pkey PRIMARY KEY (id),
+  CONSTRAINT build_bom_build_id_fkey FOREIGN KEY (build_id) REFERENCES public.builds(id)
+);
 CREATE TABLE public.builds (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   subsystem_id uuid,
@@ -12,18 +50,19 @@ CREATE TABLE public.builds (
   created_at timestamp with time zone DEFAULT now(),
   assembled_at timestamp with time zone,
   assembled_by uuid,
+  part_ids ARRAY DEFAULT '{}'::integer[],
   CONSTRAINT builds_pkey PRIMARY KEY (id),
-  CONSTRAINT builds_subsystem_id_fkey FOREIGN KEY (subsystem_id) REFERENCES public.subsystems(id),
+  CONSTRAINT builds_assembled_by_fkey FOREIGN KEY (assembled_by) REFERENCES auth.users(id),
   CONSTRAINT builds_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id),
-  CONSTRAINT builds_assembled_by_fkey FOREIGN KEY (assembled_by) REFERENCES auth.users(id)
+  CONSTRAINT builds_subsystem_id_fkey FOREIGN KEY (subsystem_id) REFERENCES public.subsystems(id)
 );
 CREATE TABLE public.parts (
   id bigint NOT NULL DEFAULT nextval('parts_id_seq'::regclass),
   name text NOT NULL,
   requester text NOT NULL,
   project_id text NOT NULL,
-  workflow text NOT NULL CHECK (workflow = ANY (ARRAY['laser-cut'::text, 'router'::text, 'lathe'::text, 'mill'::text, '3d-print'::text])),
-  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'in-progress'::text, 'cammed'::text, 'complete'::text])),
+  workflow text NOT NULL CHECK (workflow = ANY (ARRAY['laser-cut'::text, 'router'::text, 'lathe'::text, 'mill'::text, '3d-print'::text, 'purchase'::text])),
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'in-progress'::text, 'cammed'::text, 'machined'::text, 'inspected'::text, 'deburred'::text, 'complete'::text])),
   file_name text NOT NULL,
   file_url text NOT NULL,
   kitting_bin text,
@@ -39,9 +78,73 @@ CREATE TABLE public.parts (
   onshape_wvmid character varying,
   onshape_element_id character varying,
   onshape_part_id character varying,
-  file_format character varying CHECK (file_format::text = ANY (ARRAY['stl'::character varying, 'parasolid'::character varying, 'step'::character varying, 'iges'::character varying]::text[])),
+  file_format character varying CHECK (file_format::text = ANY (ARRAY['stl'::character varying::text, 'parasolid'::character varying::text, 'step'::character varying::text, 'iges'::character varying::text])),
   is_onshape_part boolean DEFAULT false,
-  CONSTRAINT parts_pkey PRIMARY KEY (id)
+  sheet_id uuid,
+  cut_date timestamp with time zone,
+  layout_x numeric,
+  layout_y numeric,
+  layout_rotation numeric DEFAULT 0,
+  onshape_drawing_element_id character varying,
+  CONSTRAINT parts_pkey PRIMARY KEY (id),
+  CONSTRAINT parts_sheet_id_fkey FOREIGN KEY (sheet_id) REFERENCES public.sheets(id)
+);
+CREATE TABLE public.purchasing (
+  id bigint NOT NULL DEFAULT nextval('purchasing_id_seq'::regclass),
+  name text NOT NULL,
+  requester text NOT NULL,
+  project_id text NOT NULL,
+  quantity integer NOT NULL DEFAULT 1,
+  material text DEFAULT ''::text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'ordered'::text, 'delivered'::text, 'kitted'::text])),
+  vendor text,
+  url text,
+  price numeric,
+  final_price numeric,
+  part_number text,
+  kitting_bin text,
+  delivered boolean DEFAULT false,
+  workflow text DEFAULT 'purchase'::text CHECK (workflow = 'purchase'::text),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT purchasing_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.sheet_cuts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  sheet_id uuid NOT NULL,
+  part_ids ARRAY NOT NULL,
+  cut_svg text NOT NULL,
+  layout_data jsonb,
+  cut_date timestamp with time zone DEFAULT now(),
+  cut_by uuid,
+  area_used numeric NOT NULL DEFAULT 0,
+  notes text,
+  cut_svg_url character varying NOT NULL DEFAULT ''::character varying,
+  cut_areas jsonb NOT NULL DEFAULT '[]'::jsonb,
+  CONSTRAINT sheet_cuts_pkey PRIMARY KEY (id),
+  CONSTRAINT sheet_cuts_sheet_id_fkey FOREIGN KEY (sheet_id) REFERENCES public.sheets(id),
+  CONSTRAINT sheet_cuts_cut_by_fkey FOREIGN KEY (cut_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.sheets (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  stock_type_id character varying NOT NULL,
+  stock_description character varying NOT NULL,
+  material character varying NOT NULL,
+  thickness numeric NOT NULL,
+  width numeric NOT NULL DEFAULT 24,
+  height numeric NOT NULL DEFAULT 48,
+  total_area numeric DEFAULT (width * height),
+  cut_svg text DEFAULT ''::text,
+  remaining_area numeric NOT NULL DEFAULT (24 * 48),
+  workflow character varying NOT NULL DEFAULT 'laser-cut'::character varying,
+  status character varying NOT NULL DEFAULT 'available'::character varying CHECK (status::text = ANY (ARRAY['available'::text, 'in-use'::text, 'exhausted'::text, 'damaged'::text])),
+  location character varying,
+  notes text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  cut_svg_url character varying,
+  cut_areas jsonb DEFAULT '[]'::jsonb,
+  CONSTRAINT sheets_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.subsystem_members (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -66,6 +169,18 @@ CREATE TABLE public.subsystems (
   CONSTRAINT subsystems_pkey PRIMARY KEY (id),
   CONSTRAINT subsystems_lead_user_id_fkey FOREIGN KEY (lead_user_id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.user_attendance_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  external_ip inet NOT NULL,
+  location_name character varying,
+  login_time timestamp with time zone DEFAULT now(),
+  session_duration_minutes integer,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_attendance_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT user_attendance_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT user_attendance_logs_external_ip_fkey FOREIGN KEY (external_ip) REFERENCES public.allowed_external_ips(ip_address)
+);
 CREATE TABLE public.user_profiles (
   id uuid NOT NULL,
   email character varying,
@@ -74,6 +189,8 @@ CREATE TABLE public.user_profiles (
   permissions ARRAY,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
+  last_attendance_date timestamp with time zone,
+  total_attendance_days integer DEFAULT 0,
   CONSTRAINT user_profiles_pkey PRIMARY KEY (id),
   CONSTRAINT user_profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
